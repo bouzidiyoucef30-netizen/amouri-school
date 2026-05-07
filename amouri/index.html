@@ -422,7 +422,7 @@ if(SB_CONFIGURED){
 // الجدول المستخدم: amouri_store (key TEXT, value JSONB)
 // ══════════════════════════════════════════════════
 const STORE = {};
-const KEYS = ['users','classes','students','attendance','auditLog','schoolLogo','darkMode','savedCreds','init2'];
+const KEYS = ['users','classes','students','attendance','auditLog','schoolLogo','darkMode','init2']; // savedCreds محلي فقط
 
 async function loadAllFromSupabase(){
   if(!SB_CONFIGURED){
@@ -628,12 +628,15 @@ function togglePassView(){
 // AUTH — REMEMBER ME
 // ══════════════════════════════════════════════════
 function loadSavedCredentials(){
-  const saved=DB.get('savedCreds');
-  if(saved){
-    document.getElementById('l-email').value=saved.email||'';
-    document.getElementById('l-pass').value=saved.pass||'';
-    document.getElementById('remember-me').checked=true;
-  }
+  // savedCreds محفوظة محلياً فقط في هذا الجهاز - لا تنتقل لأجهزة أخرى
+  try{
+    const saved=JSON.parse(localStorage.getItem('amouri_local_creds'));
+    if(saved){
+      document.getElementById('l-email').value=saved.email||'';
+      document.getElementById('l-pass').value=saved.pass||'';
+      document.getElementById('remember-me').checked=true;
+    }
+  }catch{}
 }
 loadSavedCredentials();
 loadLogo();
@@ -654,8 +657,11 @@ function doLogin(){
       btn.textContent='🔐 تسجيل الدخول'; btn.disabled=false; return;
     }
     document.getElementById('login-err').style.display='none';
-    if(remember) DB.set('savedCreds',{email,pass});
-    else DB.del('savedCreds');
+    if(remember){
+      localStorage.setItem('amouri_local_creds', JSON.stringify({email,pass}));
+    } else {
+      localStorage.removeItem('amouri_local_creds');
+    }
     const classes=DB.get('classes')||[];
     currentUser={...user,class:classes.find(c=>c.id===user.classId)};
     document.getElementById('login-screen').style.display='none';
@@ -668,6 +674,7 @@ function doLogin(){
 function doLogout(){
   currentUser=null;
   // مسح بيانات الدخول المحفوظة عند الخروج لحماية الخصوصية
+  localStorage.removeItem('amouri_local_creds');
   document.getElementById('l-email').value='';
   document.getElementById('l-pass').value='';
   document.getElementById('remember-me').checked=false;
