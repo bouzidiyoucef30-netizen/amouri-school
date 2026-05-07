@@ -511,8 +511,9 @@ function startRealtime(){
         if(payload.new && payload.new.key){
           STORE[payload.new.key] = payload.new.value;
         }
-        if(typeof currentUser !== "undefined" && currentUser && typeof setPage !== "undefined" && currentPage){
-          try{ setPage(currentPage); }catch(e){}
+        if(typeof currentUser !== "undefined" && currentUser && typeof setPage !== "undefined" && currentPage &&
+           document.getElementById('app') && document.getElementById('app').style.display !== 'none'){
+          try{ if(window._refreshPage) window._refreshPage(); else setPage(currentPage); }catch(e){}
         }
       }
     )
@@ -736,6 +737,7 @@ function buildBottomNav(){
   ).join('');
 }
 function setPage(p){
+  if(!document.getElementById('page-content')) return; // لا تشغل إذا التطبيق غير مفتوح
   currentPage=p;
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.remove('active'));
   const el=document.getElementById('nav-'+p);
