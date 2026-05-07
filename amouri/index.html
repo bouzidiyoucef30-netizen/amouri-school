@@ -59,7 +59,7 @@ body{font-family:'Cairo',sans-serif;background:var(--bg);color:var(--text);trans
 .card-title{font-size:14.5px;font-weight:800;margin-bottom:14px}
 
 /* ══ STAT CARDS ══ */
-.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
 .stat-card{background:var(--card);border-radius:14px;padding:16px;border:1px solid;transition:all .25s}
 .stat-card.clickable{cursor:pointer}
 .stat-card.clickable:hover{transform:translateY(-3px);box-shadow:0 8px 24px var(--shadow)}
@@ -123,7 +123,6 @@ tr:hover td{background:var(--input-bg)}
 .cal-day.cal-today{background:transparent;color:var(--green);border:2px solid var(--green)}
 .cal-day.cal-present{background:var(--green);color:#fff}
 .cal-day.cal-absent{background:var(--red);color:#fff}
-.cal-day.cal-noclass{background:#f59e0b;color:#fff}
 
 /* ══ MODAL ══ */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;z-index:600;backdrop-filter:blur(4px)}
@@ -779,12 +778,11 @@ function pageDashboard(){
   const myStudents=currentUser.role==='teacher'?students.filter(s=>s.classId===currentUser.classId):students;
   // Support both old (classId/studentId) and new (cid/sid) field names
   const todayAtt=attendance.filter(a=>a.date===today&&(currentUser.role==='admin'||(a.classId||a.cid)===currentUser.classId));
-  const presentToday=todayAtt.filter(a=>a.present&&!a.noclass).length;
-  const absentToday=todayAtt.filter(a=>!a.present&&!a.noclass).length;
-  const noclassToday=todayAtt.filter(a=>a.noclass).length;
+  const presentToday=todayAtt.filter(a=>a.present).length;
+  const absentToday=todayAtt.filter(a=>!a.present).length;
 
   const absentCounts={};
-  attendance.filter(a=>!a.present&&!a.noclass).forEach(a=>{
+  attendance.filter(a=>!a.present).forEach(a=>{
     const sid=a.studentId||a.sid;
     absentCounts[sid]=(absentCounts[sid]||0)+1;
   });
@@ -800,7 +798,7 @@ function pageDashboard(){
     const s=students.find(st=>st.id===sid);
     const cls=classes.find(c=>c.id===cid);
     if(!s) return null;
-    return {s,cls,present:a.present,noclass:a.noclass||false,savedAt:a.savedAt||a.at||a.date};
+    return {s,cls,present:a.present,savedAt:a.savedAt||a.at||a.date};
   }).filter(Boolean);
 
   const presentRows=allTodayRecords.filter(r=>r.present);
@@ -812,7 +810,6 @@ function pageDashboard(){
       {icon:'🏫',label:'عدد الأفواج',val:currentUser.role==='admin'?classes.length:1,color:'#8b5cf6',border:'#ede9fe',click:''},
       {icon:'✅',label:'حاضرون اليوم',val:presentToday,color:'#10b981',border:'#d1fae5',click:`showTodayDetail('present')`},
       {icon:'❌',label:'غائبون اليوم',val:absentToday,color:'#ef4444',border:'#fee2e2',click:`showTodayDetail('absent')`},
-      {icon:'🚫',label:'لا دراسة اليوم',val:noclassToday,color:'#f59e0b',border:'#fef3c7',click:''},
     ].map(s=>`<div class="stat-card${s.click?' clickable':''}" style="border-color:${s.border}33;position:relative" ${s.click?`onclick="${s.click}" title="انقر لعرض التفاصيل"`:''}>
       ${s.click?`<div style="position:absolute;top:10px;left:10px;background:${s.border};color:${s.color};border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700">تفاصيل ↗</div>`:''}
       <div class="stat-icon">${s.icon}</div>
@@ -1081,7 +1078,7 @@ function pageClasses(){
     const todayPres=att.filter(a=>a.classId===cls.id&&a.date===today&&a.present).length;
     const pct=clsStudents.length?Math.round(todayPres/clsStudents.length*100):0;
     return `<div class="card" style="border-top:4px solid ${cls.color}">
-      ${cls.image?`<img src="${cls.image}" style="width:100%;height:120px;object-fit:cover;border-radius:10px;margin-bottom:10px">`:''}
+
       <div class="flex-between" style="margin-bottom:10px">
         <div style="font-size:17px;font-weight:900">${cls.name}</div>
         ${badge(cls.level,'blue')}
@@ -1292,9 +1289,6 @@ function showEditClassModal(clsId){
       <label class="label" style="margin-top:12px">موقع الفوج (اختياري)</label>
       <input id="edit-cls-location" class="input" value="${cls.location||''}" placeholder="مثال: قاعة 1 - الدور الثاني">
 
-      <label class="label" style="margin-top:12px">صورة الفوج (اختياري)</label>
-      <input type="file" id="edit-cls-image" accept="image/*" class="input" style="padding:8px">
-      ${cls.image?`<div style="margin-top:8px"><img src="${cls.image}" style="width:80px;height:80px;object-fit:cover;border-radius:10px;border:2px solid var(--border)"><button onclick="clearClsImage()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;margin-right:8px">🗑️ حذف الصورة</button></div>`:''}
 
       <label class="label" style="margin-top:12px">لون الفوج</label>
       <div class="flex-gap" style="flex-wrap:wrap;gap:8px;margin-bottom:4px">${colorBtns}</div>
@@ -1303,17 +1297,6 @@ function showEditClassModal(clsId){
       <button class="btn" style="width:100%;margin-top:20px" onclick="doEditClass()">💾 حفظ التعديلات</button>
     </div>
   </div>`);
-}
-
-function clearClsImage(){
-  const clsId=document.getElementById('edit-cls-id')?.value;
-  if(!clsId) return;
-  const classes=DB.get('classes')||[];
-  const updated=classes.map(c=>c.id===clsId?{...c,image:''}:c);
-  DB.set('classes',updated);
-  notify('✅ تم حذف الصورة');
-  document.getElementById('edit-cls-modal')?.remove();
-  setPage('classes');
 }
 
 function selectEditColor(c){
@@ -1331,34 +1314,21 @@ function doEditClass(){
   const teacherName=document.getElementById('edit-cls-teacher')?.value.trim();
   const location=document.getElementById('edit-cls-location')?.value.trim();
   const color=document.getElementById('edit-cls-color')?.value||'#10b981';
-  const imageFile=document.getElementById('edit-cls-image')?.files[0];
-
   if(!name){notify('⚠️ يرجى إدخال اسم الفوج','#f59e0b');return;}
   if(!teacherName){notify('⚠️ يرجى إدخال اسم المعلم','#f59e0b');return;}
 
-  function applyEdit(imageData){
-    const classes=DB.get('classes')||[];
-    const cls=classes.find(c=>c.id===clsId);
-    const updated=classes.map(c=>c.id===clsId?{...c,name,level,color,location,image:imageData!==null?imageData:c.image}:c);
-    DB.set('classes',updated);
-    // Update teacher name
-    const users=DB.get('users')||[];
-    const av=teacherName.split(' ').map(w=>w[0]).join('').slice(0,2)||'أ';
-    const updatedUsers=users.map(u=>u.id===cls?.teacherId?{...u,name:teacherName,av}:u);
-    DB.set('users',updatedUsers);
-    addAuditLog('تعديل فوج',`تم تعديل الفوج: ${name}`);
-    notify('✅ تم تحديث بيانات الفوج بنجاح');
-    document.getElementById('edit-cls-modal')?.remove();
-    setPage('classes');
-  }
-
-  if(imageFile){
-    const reader=new FileReader();
-    reader.onload=e=>applyEdit(e.target.result);
-    reader.readAsDataURL(imageFile);
-  } else {
-    applyEdit(null);
-  }
+  const classes=DB.get('classes')||[];
+  const cls=classes.find(c=>c.id===clsId);
+  const updated=classes.map(c=>c.id===clsId?{...c,name,level,color,location}:c);
+  DB.set('classes',updated);
+  const users=DB.get('users')||[];
+  const av=teacherName.split(' ').map(w=>w[0]).join('').slice(0,2)||'أ';
+  const updatedUsers=users.map(u=>u.id===cls?.teacherId?{...u,name:teacherName,av}:u);
+  DB.set('users',updatedUsers);
+  addAuditLog('تعديل فوج',`تم تعديل الفوج: ${name}`);
+  notify('✅ تم تحديث بيانات الفوج بنجاح');
+  document.getElementById('edit-cls-modal')?.remove();
+  setPage('classes');
 }
 
 function deleteClass(clsId){
@@ -1391,9 +1361,9 @@ function initAttMap(){
   const att=DB.get('attendance')||[];
   window._attMap={};
   att.filter(a=>a.classId===currentUser.classId&&a.date===today).forEach(a=>{
-    window._attMap[a.studentId]=a.noclass?'noclass':a.present;
+    window._attMap[a.studentId]=a.present===true?true:a.present===false?false:null;
   });
-  students.forEach(s=>{ if(window._attMap[s.id]===undefined) window._attMap[s.id]=true; });
+  // leave undefined as null (empty state)
 }
 function pageTakeAtt(){
   const today=todayStr();
@@ -1417,29 +1387,38 @@ function pageTakeAtt(){
     }
   });
 
+  // Find last session date (last date with any record for this class, before today)
+  const classAtt=att.filter(a=>a.classId===currentUser.classId&&a.date<today);
+  const lastDate=classAtt.length?classAtt.map(a=>a.date).sort().pop():null;
+  const lastAbsent=new Set(
+    lastDate?classAtt.filter(a=>a.date===lastDate&&a.present===false).map(a=>a.studentId):[]
+  );
+
   const cards=students.map(s=>{
     const st=window._attMap[s.id];
-    const present=st===true||st===undefined;
-    const noclass=st==='noclass';
-    const bc=noclass?'#f59e0b':present?'#10b981':'#ef4444';
-    const bg=noclass?'rgba(245,158,11,0.05)':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
-    const icon=noclass?'🚫':present?'✅':'❌';
+    // 3 states: true=present, false=absent, null/undefined=empty
+    const present=st===true;
+    const absent=st===false;
+    const empty=st===null||st===undefined;
+    const bc=empty?'var(--border)':present?'#10b981':'#ef4444';
+    const bg=empty?'transparent':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
+    const icon=empty?'⬜':present?'✅':'❌';
+    const wasAbsent=lastAbsent.has(s.id);
     return `<div class="student-att-card" id="scard-${s.id}" style="border-color:${bc};background:${bg}">
       ${avatar(s.av,s.color,38)}
       <div style="flex:1">
-        <div style="font-weight:700;font-size:14px">${s.name}</div>
+        <div style="font-weight:700;font-size:14px">${s.name}${wasAbsent?` <span style="background:#fef3c7;color:#b45309;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:700;margin-right:4px">غاب الحصة الماضية</span>`:''}</div>
         <div style="font-size:11.5px;color:var(--sub)">📱 ${s.phone||'—'}</div>
       </div>
       <span id="att-icon-${s.id}" style="font-size:18px;margin-left:6px">${icon}</span>
-      <button class="toggle" id="tog-${s.id}" style="background:${noclass?'#f59e0b':present?'var(--green)':'#d1d5db'}" onclick="toggleStudent('${s.id}')">
-        <div class="toggle-dot" id="togdot-${s.id}" style="right:${present&&!noclass?'3px':'calc(100% - 23px)'}"></div>
+      <button class="toggle" id="tog-${s.id}" style="background:${present?'var(--green)':absent?'#ef4444':'#d1d5db'}" onclick="toggleStudent('${s.id}')">
+        <div class="toggle-dot" id="togdot-${s.id}" style="right:${present?'3px':'calc(100% - 23px)'}"></div>
       </button>
     </div>`;
   }).join('');
 
-  const presentCount=Object.values(window._attMap).filter(v=>v===true).length;
-  const noClassCount=Object.values(window._attMap).filter(v=>v==='noclass').length;
-  const absentCount=students.length-presentCount-noClassCount;
+  const presentCount=Object.values(window._attMap).filter(Boolean).length;
+  const absentCount=students.length-presentCount;
 
   return `
   <div class="topbar">
@@ -1455,7 +1434,6 @@ function pageTakeAtt(){
       {icon:'👥',val:students.length,label:'إجمالي',color:'#3b82f6',border:'#dbeafe'},
       {icon:'✅',val:presentCount,label:'حاضرون',color:'#10b981',border:'#d1fae5'},
       {icon:'❌',val:absentCount,label:'غائبون',color:'#ef4444',border:'#fee2e2'},
-      {icon:'🚫',val:noClassCount,label:'لا دراسة',color:'#f59e0b',border:'#fef3c7'},
     ].map(s=>`<div class="stat-card" style="border-color:${s.border}33">
       <div class="stat-icon">${s.icon}</div>
       <div class="stat-num" style="color:${s.color}">${s.val}</div>
@@ -1468,7 +1446,6 @@ function pageTakeAtt(){
       <div class="flex-gap">
         <button class="btn-sm" style="background:var(--green)" onclick="markAll(true)">✅ تحضير الكل</button>
         <button class="btn-sm" style="background:var(--red)" onclick="markAll(false)">❌ تغييب الكل</button>
-        <button class="btn-sm" style="background:#f59e0b" onclick="markNoClass()">🚫 لا توجد دراسة</button>
       </div>
     </div>
     <div class="grid-auto" id="students-cards">${cards}</div>
@@ -1479,7 +1456,7 @@ function changeAttDate(date){
   const att=DB.get('attendance')||[];
   window._attMap={};
   att.filter(a=>a.classId===currentUser.classId&&a.date===date).forEach(a=>{
-    window._attMap[a.studentId]=a.noclass?'noclass':a.present;
+    window._attMap[a.studentId]=a.present===true?true:a.present===false?false:null;
   });
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
   students.forEach(s=>{ if(window._attMap[s.id]===undefined) window._attMap[s.id]=true; });
@@ -1488,34 +1465,32 @@ function changeAttDate(date){
 }
 function toggleStudent(id){
   const cur=window._attMap[id];
-  // cycle: true -> false -> noclass -> true
-  if(cur===true||cur===undefined) window._attMap[id]=false;
-  else if(cur===false) window._attMap[id]='noclass';
-  else window._attMap[id]=true;
+  // cycle: undefined/null -> true(حاضر) -> false(غائب) -> null(فارغ)
+  if(cur===undefined||cur===null) window._attMap[id]=true;
+  else if(cur===true) window._attMap[id]=false;
+  else window._attMap[id]=null;
   _updateStudentCard(id);
 }
 function _updateStudentCard(id){
   const st=window._attMap[id];
   const present=st===true;
-  const noclass=st==='noclass';
-  const bc=noclass?'#f59e0b':present?'#10b981':'#ef4444';
-  const bg=noclass?'rgba(245,158,11,0.05)':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
-  const icon=noclass?'🚫':present?'✅':'❌';
+  const absent=st===false;
+  const empty=st===null||st===undefined;
+  const bc=empty?'var(--border)':present?'#10b981':'#ef4444';
+  const bg=empty?'transparent':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
+  const icon=empty?'⬜':present?'✅':'❌';
   const card=document.getElementById('scard-'+id);
   const tog=document.getElementById('tog-'+id);
   const dot=document.getElementById('togdot-'+id);
   const ico=document.getElementById('att-icon-'+id);
   if(card){card.style.borderColor=bc;card.style.background=bg;}
-  if(tog) tog.style.background=noclass?'#f59e0b':present?'var(--green)':'#d1d5db';
+  if(tog) tog.style.background=present?'var(--green)':absent?'#ef4444':'#d1d5db';
   if(dot) dot.style.right=present?'3px':'calc(100% - 23px)';
   if(ico) ico.textContent=icon;
 }
 function markAll(val){
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
   students.forEach(s=>{ window._attMap[s.id]=val; _updateStudentCard(s.id); });
-}
-function markNoClass(){
-  markAll('noclass');
 }
 function saveAttendance(){
   const dateEl=document.getElementById('att-date');
@@ -1525,9 +1500,8 @@ function saveAttendance(){
   const filtered=all.filter(a=>!(a.classId===currentUser.classId&&a.date===date));
   students.forEach(s=>{
     const st=window._attMap[s.id];
-    const present=st===true||(st===undefined);
-    const noclass=st==='noclass';
-    filtered.push({id:`a_${s.id}_${date}`,studentId:s.id,classId:s.classId,date,present:noclass?null:present,noclass:noclass||false,savedAt:new Date().toISOString()});
+    if(st===null||st===undefined) return; // skip empty
+    filtered.push({id:`a_${s.id}_${date}`,studentId:s.id,classId:s.classId,date,present:st===true,savedAt:new Date().toISOString()});
   });
   DB.set('attendance',filtered);
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
@@ -1554,7 +1528,6 @@ function pageCalendar(){
     const d=`${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const rec=att.find(a=>(a.studentId||a.sid)===student&&a.date===d);
     if(!rec) return '';
-    if(rec.noclass) return 'cal-noclass';
     return rec.present?'cal-present':'cal-absent';
   };
 
@@ -1573,13 +1546,11 @@ function pageCalendar(){
   if(student){
     const monthStr=`${year}-${String(month+1).padStart(2,'0')}`;
     const mAtt=att.filter(a=>(a.studentId||a.sid)===student&&a.date.startsWith(monthStr));
-    const p=mAtt.filter(a=>a.present&&!a.noclass).length;
-    const ab=mAtt.filter(a=>!a.present&&!a.noclass).length;
-    const nc=mAtt.filter(a=>a.noclass).length;
+    const p=mAtt.filter(a=>a.present).length;
+    const ab=mAtt.filter(a=>!a.present).length;
     statsHtml=`<div class="flex-wrap" style="margin-bottom:14px">
       ${badge('✅ حاضر: '+p+' يوم','green')}
       ${badge('❌ غائب: '+ab+' يوم','red')}
-      ${badge('🚫 لا دراسة: '+nc+' يوم','yellow')}
       ${badge('📊 '+(p+ab>0?Math.round(p/(p+ab)*100):0)+'%','blue')}
     </div>`;
   }
@@ -1602,8 +1573,8 @@ function pageCalendar(){
     <div class="cal-grid">${dayHeaders}</div>
     <div class="cal-grid" style="margin-top:4px">${empties}${days}</div>
     <div class="flex-wrap" style="margin-top:14px">
-      ${badge('✅ حاضر','green')} ${badge('❌ غائب','red')} <span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:700">🚫 لا دراسة</span>
-      <span style="font-size:12px;color:var(--sub)">اضغط على اليوم للتبديل بين: حاضر ← غائب ← لا دراسة</span>
+      ${badge('✅ حاضر','green')} ${badge('❌ غائب','red')}
+      <span style="font-size:12px;color:var(--sub)">اضغط على اليوم للتبديل بين: حاضر ← غائب ← فارغ</span>
     </div>
   </div>`;
 }
@@ -1625,20 +1596,24 @@ function calToggleDay(day){
   const idx=all.findIndex(a=>(a.studentId||a.sid)===student&&a.date===dateStr);
   if(idx>=0){
     const rec=all[idx];
-    // cycle: حاضر -> غائب -> لا دراسة -> حاضر
-    if(rec.present&&!rec.noclass){rec.present=false;rec.noclass=false;}
-    else if(!rec.present&&!rec.noclass){rec.present=null;rec.noclass=true;}
-    else{rec.present=true;rec.noclass=false;}
+    // cycle: حاضر -> غائب -> فارغ(حذف السجل)
+    if(rec.present===true){rec.present=false;}
+    else if(rec.present===false){
+      all.splice(idx,1);
+      DB.set('attendance',all);
+      addAuditLog('تعديل حضور',`تعديل حضور ${s?.name||''} ليوم ${dateStr}`);
+      notify('⬜ تم مسح الحضور');
+      document.getElementById('page-content').innerHTML=pageCalendar();
+      return;
+    } else {rec.present=true;}
   } else {
-    // أول ضغطة: غائب
-    all.push({id:`a_${student}_${dateStr}`,studentId:student,classId:s?.classId,date:dateStr,present:false,noclass:false,savedAt:new Date().toISOString()});
+    // أول ضغطة: حاضر
+    all.push({id:`a_${student}_${dateStr}`,studentId:student,classId:s?.classId,date:dateStr,present:true,savedAt:new Date().toISOString()});
   }
   DB.set('attendance',all);
   addAuditLog('تعديل حضور',`تعديل حضور ${s?.name||''} ليوم ${dateStr}`);
-  const labels={present:'✅ حاضر',absent:'❌ غائب',noclass:'🚫 لا توجد دراسة'};
   const rec2=all.find(a=>(a.studentId||a.sid)===student&&a.date===dateStr);
-  const lbl=rec2?.noclass?'noclass':rec2?.present?'present':'absent';
-  notify(labels[lbl]);
+  notify(rec2?.present?'✅ حاضر':'❌ غائب');
   document.getElementById('page-content').innerHTML=pageCalendar();
 }
 
@@ -1862,7 +1837,7 @@ Object.assign(window, {
   pageDashboard, showTodayDetail,
   pageSettings, uploadLogo, removeLogo, changeAdminPass,
   pageClasses, showCreateClassModal, doCreateClass, deleteClass, showEditCredsModal, doEditCreds,
-  showEditClassModal, doEditClass, selectEditColor, clearClsImage,
+  showEditClassModal, doEditClass, selectEditColor,
   showCredsModal, selectColor,
   pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, markNoClass, saveAttendance, _updateStudentCard,
   pageCalendar, calNav, calSetStudent, calToggleDay,
