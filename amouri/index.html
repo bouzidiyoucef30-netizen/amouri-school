@@ -667,6 +667,10 @@ function doLogin(){
 }
 function doLogout(){
   currentUser=null;
+  // مسح بيانات الدخول المحفوظة عند الخروج لحماية الخصوصية
+  document.getElementById('l-email').value='';
+  document.getElementById('l-pass').value='';
+  document.getElementById('remember-me').checked=false;
   document.getElementById('login-screen').style.display='flex';
   document.getElementById('app').style.display='none';
   const sb=document.getElementById('sidebar');
@@ -1045,6 +1049,7 @@ function pageClasses(){
         <div class="cred-row"><span>كلمة المرور:</span><div class="flex-gap"><span class="cred-val">${teacher.password}</span><button class="copy-btn" onclick="copyText('${teacher.password}')">نسخ</button></div></div>
         <div class="cred-row" style="margin-bottom:0"><span>اسم المعلم:</span><span style="font-weight:700">${teacher.name}</span></div>
       </div>
+      <button class="btn-sm" style="background:#3b82f6;margin-top:12px;width:100%" onclick="showEditCredsModal('${teacher.id}')">✏️ تعديل بيانات الدخول</button>
     </div>`:''}
     <div class="card">
       <div class="table-wrap">
@@ -1207,6 +1212,40 @@ function showCredsModal(clsName,teacherName,code,pass){
     </div>
   </div>`);
 }
+function showEditCredsModal(teacherId){
+  const users=DB.get('users')||[];
+  const teacher=users.find(u=>u.id===teacherId);
+  if(!teacher) return;
+  document.body.insertAdjacentHTML('beforeend',`
+  <div id="edit-creds-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:16px">
+    <div class="card" style="width:100%;max-width:400px;position:relative">
+      <button onclick="document.getElementById('edit-creds-modal').remove()" style="position:absolute;top:12px;left:12px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--sub)">✕</button>
+      <div class="card-title" style="margin-bottom:16px">✏️ تعديل بيانات دخول المعلم</div>
+      <div style="font-size:13px;color:var(--sub);margin-bottom:16px">المعلم: <strong>${teacher.name}</strong></div>
+      <label class="label">رمز الدخول الجديد</label>
+      <input id="edit-code" class="input" value="${teacher.classCode||teacher.email}" placeholder="رمز الدخول">
+      <label class="label" style="margin-top:12px">كلمة المرور الجديدة</label>
+      <input id="edit-pass" class="input" value="${teacher.password}" placeholder="كلمة المرور">
+      <button class="btn" style="width:100%;margin-top:16px" onclick="doEditCreds('${teacherId}')">💾 حفظ التعديلات</button>
+    </div>
+  </div>`);
+}
+
+function doEditCreds(teacherId){
+  const newCode=document.getElementById('edit-code').value.trim();
+  const newPass=document.getElementById('edit-pass').value.trim();
+  if(!newCode||!newPass){notify('⚠️ يرجى إدخال رمز الدخول وكلمة المرور','#f59e0b');return;}
+  const users=DB.get('users')||[];
+  const conflict=users.find(u=>u.id!==teacherId&&(u.classCode===newCode||u.email===newCode));
+  if(conflict){notify('⚠️ رمز الدخول مستخدم بالفعل، اختر رمزاً آخر','#ef4444');return;}
+  const updated=users.map(u=>u.id===teacherId?{...u,classCode:newCode,password:newPass}:u);
+  DB.set('users',updated);
+  addAuditLog('تعديل بيانات دخول',`تم تعديل بيانات دخول المعلم`);
+  notify('✅ تم تحديث بيانات الدخول بنجاح');
+  document.getElementById('edit-creds-modal').remove();
+  setPage('classes');
+}
+
 function deleteClass(clsId){
   if(!confirm('هل أنت متأكد من حذف هذا الفوج؟ سيتم حذف جميع بياناته.')) return;
   const classes=DB.get('classes')||[];
@@ -1670,7 +1709,7 @@ Object.assign(window, {
   setPage, toggleMenu, buildSidebar,
   pageDashboard, showTodayDetail,
   pageSettings, uploadLogo, removeLogo, changeAdminPass,
-  pageClasses, showCreateClassModal, doCreateClass, deleteClass,
+  pageClasses, showCreateClassModal, doCreateClass, deleteClass, showEditCredsModal, doEditCreds,
   showCredsModal, selectColor,
   pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, saveAttendance,
   pageCalendar, calNav, calSetStudent, calToggleDay,
