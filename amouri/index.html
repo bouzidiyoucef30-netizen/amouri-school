@@ -59,7 +59,7 @@ body{font-family:'Cairo',sans-serif;background:var(--bg);color:var(--text);trans
 .card-title{font-size:14.5px;font-weight:800;margin-bottom:14px}
 
 /* ══ STAT CARDS ══ */
-.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
 .stat-card{background:var(--card);border-radius:14px;padding:16px;border:1px solid;transition:all .25s}
 .stat-card.clickable{cursor:pointer}
 .stat-card.clickable:hover{transform:translateY(-3px);box-shadow:0 8px 24px var(--shadow)}
@@ -123,6 +123,7 @@ tr:hover td{background:var(--input-bg)}
 .cal-day.cal-today{background:transparent;color:var(--green);border:2px solid var(--green)}
 .cal-day.cal-present{background:var(--green);color:#fff}
 .cal-day.cal-absent{background:var(--red);color:#fff}
+.cal-day.cal-noclass{background:#f59e0b;color:#fff}
 
 /* ══ MODAL ══ */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;z-index:600;backdrop-filter:blur(4px)}
@@ -778,11 +779,12 @@ function pageDashboard(){
   const myStudents=currentUser.role==='teacher'?students.filter(s=>s.classId===currentUser.classId):students;
   // Support both old (classId/studentId) and new (cid/sid) field names
   const todayAtt=attendance.filter(a=>a.date===today&&(currentUser.role==='admin'||(a.classId||a.cid)===currentUser.classId));
-  const presentToday=todayAtt.filter(a=>a.present).length;
-  const absentToday=todayAtt.filter(a=>!a.present).length;
+  const presentToday=todayAtt.filter(a=>a.present&&!a.noclass).length;
+  const absentToday=todayAtt.filter(a=>!a.present&&!a.noclass).length;
+  const noclassToday=todayAtt.filter(a=>a.noclass).length;
 
   const absentCounts={};
-  attendance.filter(a=>!a.present).forEach(a=>{
+  attendance.filter(a=>!a.present&&!a.noclass).forEach(a=>{
     const sid=a.studentId||a.sid;
     absentCounts[sid]=(absentCounts[sid]||0)+1;
   });
@@ -798,7 +800,7 @@ function pageDashboard(){
     const s=students.find(st=>st.id===sid);
     const cls=classes.find(c=>c.id===cid);
     if(!s) return null;
-    return {s,cls,present:a.present,savedAt:a.savedAt||a.at||a.date};
+    return {s,cls,present:a.present,noclass:a.noclass||false,savedAt:a.savedAt||a.at||a.date};
   }).filter(Boolean);
 
   const presentRows=allTodayRecords.filter(r=>r.present);
@@ -810,6 +812,7 @@ function pageDashboard(){
       {icon:'🏫',label:'عدد الأفواج',val:currentUser.role==='admin'?classes.length:1,color:'#8b5cf6',border:'#ede9fe',click:''},
       {icon:'✅',label:'حاضرون اليوم',val:presentToday,color:'#10b981',border:'#d1fae5',click:`showTodayDetail('present')`},
       {icon:'❌',label:'غائبون اليوم',val:absentToday,color:'#ef4444',border:'#fee2e2',click:`showTodayDetail('absent')`},
+      {icon:'🚫',label:'لا دراسة اليوم',val:noclassToday,color:'#f59e0b',border:'#fef3c7',click:''},
     ].map(s=>`<div class="stat-card${s.click?' clickable':''}" style="border-color:${s.border}33;position:relative" ${s.click?`onclick="${s.click}" title="انقر لعرض التفاصيل"`:''}>
       ${s.click?`<div style="position:absolute;top:10px;left:10px;background:${s.border};color:${s.color};border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700">تفاصيل ↗</div>`:''}
       <div class="stat-icon">${s.icon}</div>
@@ -1551,6 +1554,7 @@ function pageCalendar(){
     const d=`${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const rec=att.find(a=>(a.studentId||a.sid)===student&&a.date===d);
     if(!rec) return '';
+    if(rec.noclass) return 'cal-noclass';
     return rec.present?'cal-present':'cal-absent';
   };
 
@@ -1569,11 +1573,13 @@ function pageCalendar(){
   if(student){
     const monthStr=`${year}-${String(month+1).padStart(2,'0')}`;
     const mAtt=att.filter(a=>(a.studentId||a.sid)===student&&a.date.startsWith(monthStr));
-    const p=mAtt.filter(a=>a.present).length;
-    const ab=mAtt.filter(a=>!a.present).length;
+    const p=mAtt.filter(a=>a.present&&!a.noclass).length;
+    const ab=mAtt.filter(a=>!a.present&&!a.noclass).length;
+    const nc=mAtt.filter(a=>a.noclass).length;
     statsHtml=`<div class="flex-wrap" style="margin-bottom:14px">
       ${badge('✅ حاضر: '+p+' يوم','green')}
       ${badge('❌ غائب: '+ab+' يوم','red')}
+      ${badge('🚫 لا دراسة: '+nc+' يوم','yellow')}
       ${badge('📊 '+(p+ab>0?Math.round(p/(p+ab)*100):0)+'%','blue')}
     </div>`;
   }
@@ -1596,8 +1602,8 @@ function pageCalendar(){
     <div class="cal-grid">${dayHeaders}</div>
     <div class="cal-grid" style="margin-top:4px">${empties}${days}</div>
     <div class="flex-wrap" style="margin-top:14px">
-      ${badge('✅ حاضر','green')} ${badge('❌ غائب','red')}
-      <span style="font-size:12px;color:var(--sub)">اضغط على أي يوم لتعديل الحضور</span>
+      ${badge('✅ حاضر','green')} ${badge('❌ غائب','red')} <span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:700">🚫 لا دراسة</span>
+      <span style="font-size:12px;color:var(--sub)">اضغط على اليوم للتبديل بين: حاضر ← غائب ← لا دراسة</span>
     </div>
   </div>`;
 }
@@ -1617,11 +1623,22 @@ function calToggleDay(day){
   const students=DB.get('students')||[];
   const s=students.find(st=>st.id===student);
   const idx=all.findIndex(a=>(a.studentId||a.sid)===student&&a.date===dateStr);
-  if(idx>=0) all[idx].present=!all[idx].present;
-  else all.push({id:`a_${student}_${dateStr}`,studentId:student,classId:s?.classId,date:dateStr,present:false,savedAt:new Date().toISOString()});
+  if(idx>=0){
+    const rec=all[idx];
+    // cycle: حاضر -> غائب -> لا دراسة -> حاضر
+    if(rec.present&&!rec.noclass){rec.present=false;rec.noclass=false;}
+    else if(!rec.present&&!rec.noclass){rec.present=null;rec.noclass=true;}
+    else{rec.present=true;rec.noclass=false;}
+  } else {
+    // أول ضغطة: غائب
+    all.push({id:`a_${student}_${dateStr}`,studentId:student,classId:s?.classId,date:dateStr,present:false,noclass:false,savedAt:new Date().toISOString()});
+  }
   DB.set('attendance',all);
   addAuditLog('تعديل حضور',`تعديل حضور ${s?.name||''} ليوم ${dateStr}`);
-  notify('✅ تم تحديث الحضور');
+  const labels={present:'✅ حاضر',absent:'❌ غائب',noclass:'🚫 لا توجد دراسة'};
+  const rec2=all.find(a=>(a.studentId||a.sid)===student&&a.date===dateStr);
+  const lbl=rec2?.noclass?'noclass':rec2?.present?'present':'absent';
+  notify(labels[lbl]);
   document.getElementById('page-content').innerHTML=pageCalendar();
 }
 
