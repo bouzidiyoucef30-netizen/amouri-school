@@ -1046,8 +1046,12 @@ function pageClasses(){
       <div>
         <button class="btn-ghost" onclick="window._selectedClass=null;setPage('classes')">◀ العودة</button>
         <div class="page-title" style="margin-top:8px">${cls?.name}</div>
+        ${cls?.location?`<div style="font-size:12px;color:var(--sub);margin-top:4px">📍 ${cls.location}</div>`:''}
       </div>
-      <button class="btn-sm" style="background:#ef4444" onclick="deleteClass('${cls?.id}')">🗑️ حذف الفوج</button>
+      <div class="flex-gap">
+        <button class="btn-sm" style="background:#3b82f6" onclick="showEditClassModal('${cls?.id}')">✏️ تعديل الفوج</button>
+        <button class="btn-sm" style="background:#ef4444" onclick="deleteClass('${cls?.id}')">🗑️ حذف الفوج</button>
+      </div>
     </div>
     ${teacher?`<div class="card" style="margin-bottom:16px">
       <div class="card-title">👨‍🏫 بيانات دخول المعلم</div>
@@ -1074,12 +1078,13 @@ function pageClasses(){
     const todayPres=att.filter(a=>a.classId===cls.id&&a.date===today&&a.present).length;
     const pct=clsStudents.length?Math.round(todayPres/clsStudents.length*100):0;
     return `<div class="card" style="border-top:4px solid ${cls.color}">
+      ${cls.image?`<img src="${cls.image}" style="width:100%;height:120px;object-fit:cover;border-radius:10px;margin-bottom:10px">`:''}
       <div class="flex-between" style="margin-bottom:10px">
         <div style="font-size:17px;font-weight:900">${cls.name}</div>
         ${badge(cls.level,'blue')}
       </div>
       <div style="font-size:12.5px;color:var(--sub);margin-bottom:12px">
-        👨‍🏫 ${teacher?.name||'غير محدد'}<br>👥 ${clsStudents.length} طالب
+        👨‍🏫 ${teacher?.name||'غير محدد'}<br>👥 ${clsStudents.length} طالب${cls.location?`<br>📍 ${cls.location}`:''}
       </div>
       <div class="flex-between" style="margin-bottom:5px">
         <span style="font-size:12px;font-weight:700">حضور اليوم</span>
@@ -1253,6 +1258,106 @@ function doEditCreds(teacherId){
   setPage('classes');
 }
 
+function showEditClassModal(clsId){
+  const classes=DB.get('classes')||[];
+  const cls=classes.find(c=>c.id===clsId);
+  if(!cls) return;
+  const users=DB.get('users')||[];
+  const teacher=users.find(u=>u.id===cls.teacherId);
+  const colors=['#10b981','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#0d9488','#db2777','#0284c7','#b45309'];
+  const colorBtns=colors.map(c=>
+    `<div onclick="selectEditColor('${c}')" id="eclr-${c.replace('#','')}" style="width:28px;height:28px;border-radius:50%;background:${c};cursor:pointer;border:${c===cls.color?'3px solid var(--text)':'2px solid transparent'};transition:all .15s"></div>`
+  ).join('');
+  const levels=['مبتدئ','متوسط','متقدم'];
+  const levelOpts=levels.map(l=>`<option value="${l}" ${l===cls.level?'selected':''}>${l}</option>`).join('');
+  document.body.insertAdjacentHTML('beforeend',`
+  <div id="edit-cls-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto">
+    <div class="card" style="width:100%;max-width:440px;position:relative;margin:auto">
+      <button onclick="document.getElementById('edit-cls-modal').remove()" style="position:absolute;top:12px;left:12px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--sub)">✕</button>
+      <div class="card-title" style="margin-bottom:20px">✏️ تعديل بيانات الفوج</div>
+      <input type="hidden" id="edit-cls-id" value="${clsId}">
+
+      <label class="label">اسم الفوج</label>
+      <input id="edit-cls-name" class="input" value="${cls.name}" placeholder="اسم الفوج">
+
+      <label class="label" style="margin-top:12px">المستوى</label>
+      <select id="edit-cls-level" class="input">${levelOpts}</select>
+
+      <label class="label" style="margin-top:12px">اسم المعلم</label>
+      <input id="edit-cls-teacher" class="input" value="${teacher?.name||''}" placeholder="اسم المعلم">
+
+      <label class="label" style="margin-top:12px">موقع الفوج (اختياري)</label>
+      <input id="edit-cls-location" class="input" value="${cls.location||''}" placeholder="مثال: قاعة 1 - الدور الثاني">
+
+      <label class="label" style="margin-top:12px">صورة الفوج (اختياري)</label>
+      <input type="file" id="edit-cls-image" accept="image/*" class="input" style="padding:8px">
+      ${cls.image?`<div style="margin-top:8px"><img src="${cls.image}" style="width:80px;height:80px;object-fit:cover;border-radius:10px;border:2px solid var(--border)"><button onclick="clearClsImage()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;margin-right:8px">🗑️ حذف الصورة</button></div>`:''}
+
+      <label class="label" style="margin-top:12px">لون الفوج</label>
+      <div class="flex-gap" style="flex-wrap:wrap;gap:8px;margin-bottom:4px">${colorBtns}</div>
+      <input type="hidden" id="edit-cls-color" value="${cls.color}">
+
+      <button class="btn" style="width:100%;margin-top:20px" onclick="doEditClass()">💾 حفظ التعديلات</button>
+    </div>
+  </div>`);
+}
+
+function clearClsImage(){
+  const clsId=document.getElementById('edit-cls-id')?.value;
+  if(!clsId) return;
+  const classes=DB.get('classes')||[];
+  const updated=classes.map(c=>c.id===clsId?{...c,image:''}:c);
+  DB.set('classes',updated);
+  notify('✅ تم حذف الصورة');
+  document.getElementById('edit-cls-modal')?.remove();
+  setPage('classes');
+}
+
+function selectEditColor(c){
+  document.querySelectorAll('[id^="eclr-"]').forEach(el=>el.style.border='2px solid transparent');
+  const el=document.getElementById('eclr-'+c.replace('#',''));
+  if(el) el.style.border='3px solid var(--text)';
+  const inp=document.getElementById('edit-cls-color');
+  if(inp) inp.value=c;
+}
+
+function doEditClass(){
+  const clsId=document.getElementById('edit-cls-id')?.value;
+  const name=document.getElementById('edit-cls-name')?.value.trim();
+  const level=document.getElementById('edit-cls-level')?.value;
+  const teacherName=document.getElementById('edit-cls-teacher')?.value.trim();
+  const location=document.getElementById('edit-cls-location')?.value.trim();
+  const color=document.getElementById('edit-cls-color')?.value||'#10b981';
+  const imageFile=document.getElementById('edit-cls-image')?.files[0];
+
+  if(!name){notify('⚠️ يرجى إدخال اسم الفوج','#f59e0b');return;}
+  if(!teacherName){notify('⚠️ يرجى إدخال اسم المعلم','#f59e0b');return;}
+
+  function applyEdit(imageData){
+    const classes=DB.get('classes')||[];
+    const cls=classes.find(c=>c.id===clsId);
+    const updated=classes.map(c=>c.id===clsId?{...c,name,level,color,location,image:imageData!==null?imageData:c.image}:c);
+    DB.set('classes',updated);
+    // Update teacher name
+    const users=DB.get('users')||[];
+    const av=teacherName.split(' ').map(w=>w[0]).join('').slice(0,2)||'أ';
+    const updatedUsers=users.map(u=>u.id===cls?.teacherId?{...u,name:teacherName,av}:u);
+    DB.set('users',updatedUsers);
+    addAuditLog('تعديل فوج',`تم تعديل الفوج: ${name}`);
+    notify('✅ تم تحديث بيانات الفوج بنجاح');
+    document.getElementById('edit-cls-modal')?.remove();
+    setPage('classes');
+  }
+
+  if(imageFile){
+    const reader=new FileReader();
+    reader.onload=e=>applyEdit(e.target.result);
+    reader.readAsDataURL(imageFile);
+  } else {
+    applyEdit(null);
+  }
+}
+
 function deleteClass(clsId){
   if(!confirm('هل أنت متأكد من حذف هذا الفوج؟ سيتم حذف جميع بياناته.')) return;
   const classes=DB.get('classes')||[];
@@ -1282,7 +1387,9 @@ function initAttMap(){
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
   const att=DB.get('attendance')||[];
   window._attMap={};
-  att.filter(a=>a.classId===currentUser.classId&&a.date===today).forEach(a=>window._attMap[a.studentId]=a.present);
+  att.filter(a=>a.classId===currentUser.classId&&a.date===today).forEach(a=>{
+    window._attMap[a.studentId]=a.noclass?'noclass':a.present;
+  });
   students.forEach(s=>{ if(window._attMap[s.id]===undefined) window._attMap[s.id]=true; });
 }
 function pageTakeAtt(){
@@ -1308,21 +1415,28 @@ function pageTakeAtt(){
   });
 
   const cards=students.map(s=>{
-    const present=window._attMap[s.id]!==false;
-    return `<div class="student-att-card" id="scard-${s.id}" style="border-color:${present?'#10b981':'#ef4444'};background:${present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)'}">
+    const st=window._attMap[s.id];
+    const present=st===true||st===undefined;
+    const noclass=st==='noclass';
+    const bc=noclass?'#f59e0b':present?'#10b981':'#ef4444';
+    const bg=noclass?'rgba(245,158,11,0.05)':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
+    const icon=noclass?'🚫':present?'✅':'❌';
+    return `<div class="student-att-card" id="scard-${s.id}" style="border-color:${bc};background:${bg}">
       ${avatar(s.av,s.color,38)}
       <div style="flex:1">
         <div style="font-weight:700;font-size:14px">${s.name}</div>
         <div style="font-size:11.5px;color:var(--sub)">📱 ${s.phone||'—'}</div>
       </div>
-      <button class="toggle" id="tog-${s.id}" style="background:${present?'var(--green)':'#d1d5db'}" onclick="toggleStudent('${s.id}')">
-        <div class="toggle-dot" id="togdot-${s.id}" style="right:${present?'3px':'calc(100% - 23px)'}"></div>
+      <span id="att-icon-${s.id}" style="font-size:18px;margin-left:6px">${icon}</span>
+      <button class="toggle" id="tog-${s.id}" style="background:${noclass?'#f59e0b':present?'var(--green)':'#d1d5db'}" onclick="toggleStudent('${s.id}')">
+        <div class="toggle-dot" id="togdot-${s.id}" style="right:${present&&!noclass?'3px':'calc(100% - 23px)'}"></div>
       </button>
     </div>`;
   }).join('');
 
-  const presentCount=Object.values(window._attMap).filter(Boolean).length;
-  const absentCount=students.length-presentCount;
+  const presentCount=Object.values(window._attMap).filter(v=>v===true).length;
+  const noClassCount=Object.values(window._attMap).filter(v=>v==='noclass').length;
+  const absentCount=students.length-presentCount-noClassCount;
 
   return `
   <div class="topbar">
@@ -1338,7 +1452,7 @@ function pageTakeAtt(){
       {icon:'👥',val:students.length,label:'إجمالي',color:'#3b82f6',border:'#dbeafe'},
       {icon:'✅',val:presentCount,label:'حاضرون',color:'#10b981',border:'#d1fae5'},
       {icon:'❌',val:absentCount,label:'غائبون',color:'#ef4444',border:'#fee2e2'},
-      {icon:'📊',val:students.length?Math.round(presentCount/students.length*100)+'%':'0%',label:'نسبة الحضور',color:'#8b5cf6',border:'#ede9fe'},
+      {icon:'🚫',val:noClassCount,label:'لا دراسة',color:'#f59e0b',border:'#fef3c7'},
     ].map(s=>`<div class="stat-card" style="border-color:${s.border}33">
       <div class="stat-icon">${s.icon}</div>
       <div class="stat-num" style="color:${s.color}">${s.val}</div>
@@ -1351,6 +1465,7 @@ function pageTakeAtt(){
       <div class="flex-gap">
         <button class="btn-sm" style="background:var(--green)" onclick="markAll(true)">✅ تحضير الكل</button>
         <button class="btn-sm" style="background:var(--red)" onclick="markAll(false)">❌ تغييب الكل</button>
+        <button class="btn-sm" style="background:#f59e0b" onclick="markNoClass()">🚫 لا توجد دراسة</button>
       </div>
     </div>
     <div class="grid-auto" id="students-cards">${cards}</div>
@@ -1360,34 +1475,44 @@ function changeAttDate(date){
   // Load existing attendance for the selected date
   const att=DB.get('attendance')||[];
   window._attMap={};
-  att.filter(a=>a.classId===currentUser.classId&&a.date===date).forEach(a=>window._attMap[a.studentId]=a.present);
+  att.filter(a=>a.classId===currentUser.classId&&a.date===date).forEach(a=>{
+    window._attMap[a.studentId]=a.noclass?'noclass':a.present;
+  });
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
   students.forEach(s=>{ if(window._attMap[s.id]===undefined) window._attMap[s.id]=true; });
   document.getElementById('page-content').innerHTML=pageTakeAtt();
   document.getElementById('att-date').value=date;
 }
 function toggleStudent(id){
-  window._attMap[id]=!window._attMap[id];
-  const p=window._attMap[id];
+  const cur=window._attMap[id];
+  // cycle: true -> false -> noclass -> true
+  if(cur===true||cur===undefined) window._attMap[id]=false;
+  else if(cur===false) window._attMap[id]='noclass';
+  else window._attMap[id]=true;
+  _updateStudentCard(id);
+}
+function _updateStudentCard(id){
+  const st=window._attMap[id];
+  const present=st===true;
+  const noclass=st==='noclass';
+  const bc=noclass?'#f59e0b':present?'#10b981':'#ef4444';
+  const bg=noclass?'rgba(245,158,11,0.05)':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
+  const icon=noclass?'🚫':present?'✅':'❌';
   const card=document.getElementById('scard-'+id);
   const tog=document.getElementById('tog-'+id);
   const dot=document.getElementById('togdot-'+id);
-  if(card){card.style.borderColor=p?'#10b981':'#ef4444';card.style.background=p?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';}
-  if(tog) tog.style.background=p?'var(--green)':'#d1d5db';
-  if(dot) dot.style.right=p?'3px':'calc(100% - 23px)';
+  const ico=document.getElementById('att-icon-'+id);
+  if(card){card.style.borderColor=bc;card.style.background=bg;}
+  if(tog) tog.style.background=noclass?'#f59e0b':present?'var(--green)':'#d1d5db';
+  if(dot) dot.style.right=present?'3px':'calc(100% - 23px)';
+  if(ico) ico.textContent=icon;
 }
 function markAll(val){
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
-  students.forEach(s=>{
-    window._attMap[s.id]=val;
-    const p=val;
-    const card=document.getElementById('scard-'+s.id);
-    const tog=document.getElementById('tog-'+s.id);
-    const dot=document.getElementById('togdot-'+s.id);
-    if(card){card.style.borderColor=p?'#10b981':'#ef4444';card.style.background=p?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';}
-    if(tog) tog.style.background=p?'var(--green)':'#d1d5db';
-    if(dot) dot.style.right=p?'3px':'calc(100% - 23px)';
-  });
+  students.forEach(s=>{ window._attMap[s.id]=val; _updateStudentCard(s.id); });
+}
+function markNoClass(){
+  markAll('noclass');
 }
 function saveAttendance(){
   const dateEl=document.getElementById('att-date');
@@ -1396,7 +1521,10 @@ function saveAttendance(){
   const all=DB.get('attendance')||[];
   const filtered=all.filter(a=>!(a.classId===currentUser.classId&&a.date===date));
   students.forEach(s=>{
-    filtered.push({id:`a_${s.id}_${date}`,studentId:s.id,classId:s.classId,date,present:window._attMap[s.id]!==false,savedAt:new Date().toISOString()});
+    const st=window._attMap[s.id];
+    const present=st===true||(st===undefined);
+    const noclass=st==='noclass';
+    filtered.push({id:`a_${s.id}_${date}`,studentId:s.id,classId:s.classId,date,present:noclass?null:present,noclass:noclass||false,savedAt:new Date().toISOString()});
   });
   DB.set('attendance',filtered);
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
@@ -1717,8 +1845,9 @@ Object.assign(window, {
   pageDashboard, showTodayDetail,
   pageSettings, uploadLogo, removeLogo, changeAdminPass,
   pageClasses, showCreateClassModal, doCreateClass, deleteClass, showEditCredsModal, doEditCreds,
+  showEditClassModal, doEditClass, selectEditColor, clearClsImage,
   showCredsModal, selectColor,
-  pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, saveAttendance,
+  pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, markNoClass, saveAttendance, _updateStudentCard,
   pageCalendar, calNav, calSetStudent, calToggleDay,
   pageStudents, deleteStudent, showAddStudentModal, doAddStudent,
   pageStats, exportCSV,
