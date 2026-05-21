@@ -411,6 +411,26 @@ body.dark #login-screen{background:linear-gradient(160deg,#0f172a,#0d2818,#0f172
 // ══════════════════════════════════════════════════
 // SUPABASE CONFIG — ضع هنا بياناتك من لوحة Supabase
 // ══════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// SQL لإنشاء جدول attendance في Supabase (شغّله مرة واحدة):
+// CREATE TABLE IF NOT EXISTS attendance (
+//   id BIGSERIAL PRIMARY KEY,
+//   student_id TEXT NOT NULL,
+//   class_id TEXT NOT NULL,
+//   date DATE NOT NULL,
+//   present BOOLEAN,
+//   created_at TIMESTAMPTZ DEFAULT NOW(),
+//   UNIQUE(student_id, class_id, date)
+// );
+// -- Indexes لتحسين الأداء
+// CREATE INDEX IF NOT EXISTS idx_att_student ON attendance(student_id);
+// CREATE INDEX IF NOT EXISTS idx_att_class   ON attendance(class_id);
+// CREATE INDEX IF NOT EXISTS idx_att_date    ON attendance(date);
+// CREATE INDEX IF NOT EXISTS idx_att_cls_date ON attendance(class_id, date);
+// ALTER TABLE attendance ENABLE ROW LEVEL SECURITY;
+// CREATE POLICY "allow_all" ON attendance FOR ALL USING (true) WITH CHECK (true);
+// ALTER PUBLICATION supabase_realtime ADD TABLE attendance;
+// ══════════════════════════════════════════════════════════════
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
 const SUPABASE_URL  = "https://hnhbzvdsqmtvtgtpujiv.supabase.co";   // مثال: https://xxxx.supabase.co
@@ -429,7 +449,7 @@ if(SB_CONFIGURED){
 // الجدول المستخدم: amouri_store (key TEXT, value JSONB)
 // ══════════════════════════════════════════════════
 const STORE = {};
-const KEYS = ['users','classes','students','attendance','auditLog','schoolLogo','darkMode','init2']; // savedCreds محلي فقط
+const KEYS = ['users','classes','students','auditLog','schoolLogo','darkMode','init2']; // attendance → جدول مستقل
 
 async function loadAllFromSupabase(){
   if(!SB_CONFIGURED){
@@ -479,11 +499,267 @@ const DB={
     ]);
     this.set('classes',[]);
     this.set('students',[]);
-    this.set('attendance',[]);
     this.set('auditLog',[]);
     this.set('schoolLogo','');
     this.set('init2',true);
   }
+};
+
+
+// ══════════════════════════════════════════════════════════════
+// ATT — نظام الحضور المستقل (جدول attendance منفصل في Supabase)
+// ══════════════════════════════════════════════════════════════
+const ATT = {
+  // cache: { "classId|date": { studentId: true/false/null } }
+  _cache: {},
+
+  _key(classId, date){ return `${classId}|${date}`; },
+
+  // جلب حضور فوج ليوم معين (مع pagination لدعم الأعداد الكبيرة)
+  async load(classId, date){
+    const k = this._key(classId, date);
+    if(!SB_CONFIGURED){
+      try{
+        const raw = localStorage.getItem('att_'+k);
+        this._cache[k] = raw ? JSON.parse(raw) : {};
+      }catch{ this._cache[k] = {}; }
+      return this._cache[k];
+    }
+    try{
+      const map = {};
+      let from = 0;
+      const PAGE = 500;
+      while(true){
+        const { data, error } = await supabase
+          .from('attendance')
+          .select('student_id, present')
+          .eq('class_id', classId)
+          .eq('date', date)
+          .range(from, from + PAGE - 1);
+        if(error) throw error;
+        (data||[]).forEach(r => { map[r.student_id] = r.present; });
+        if(!data || data.length < PAGE) break;
+        from += PAGE;
+      }
+      this._cache[k] = map;
+      return map;
+    }catch(e){
+      console.warn('ATT.load error:', e);
+      return this._cache[k] || {};
+    }
+  },
+
+  // حفظ سجل حضور طالب واحد (upsert)
+  async save(studentId, classId, date, present){
+    const k = this._key(classId, date);
+    if(!this._cache[k]) this._cache[k] = {};
+
+    if(!SB_CONFIGURED){
+      if(present === null || present === undefined){
+        delete this._cache[k][studentId];
+      } else {
+        this._cache[k][studentId] = present;
+      }
+      try{ localStorage.setItem('att_'+k, JSON.stringify(this._cache[k])); }catch{}
+      return { ok: true };
+    }
+
+    try{
+      if(present === null || present === undefined){
+        // حذف السجل إذا كانت الحالة فارغة
+        const { error } = await supabase
+          .from('attendance')
+          .delete()
+          .eq('student_id', studentId)
+          .eq('class_id', classId)
+          .eq('date', date);
+        if(error) throw error;
+        delete this._cache[k][studentId];
+      } else {
+        const { error } = await supabase
+          .from('attendance')
+          .upsert({
+            student_id: studentId,
+            class_id: classId,
+            date: date,
+            present: present
+          }, { onConflict: 'student_id,class_id,date' });
+        if(error) throw error;
+        this._cache[k][studentId] = present;
+      }
+      // backup to localStorage
+      try{ localStorage.setItem('att_'+k, JSON.stringify(this._cache[k])); }catch{}
+      return { ok: true };
+    }catch(e){
+      console.warn('ATT.save error:', e);
+      return { ok: false, error: e };
+    }
+  },
+
+  // حفظ حضور كل الطلبة دفعة واحدة (batch upsert)
+  async saveAll(records, classId, date){
+    const k = this._key(classId, date);
+    if(!this._cache[k]) this._cache[k] = {};
+
+    if(!SB_CONFIGURED){
+      records.forEach(r => {
+        if(r.present === null) delete this._cache[k][r.studentId];
+        else this._cache[k][r.studentId] = r.present;
+      });
+      try{ localStorage.setItem('att_'+k, JSON.stringify(this._cache[k])); }catch{}
+      return { ok: true };
+    }
+
+    try{
+      // أولاً: حذف سجلات هذا اليوم لهذا الفوج
+      await supabase.from('attendance').delete()
+        .eq('class_id', classId).eq('date', date);
+
+      // ثانياً: إدخال السجلات الجديدة فقط (بدون الفارغة)
+      const toInsert = records
+        .filter(r => r.present !== null && r.present !== undefined)
+        .map(r => ({
+          student_id: r.studentId,
+          class_id: classId,
+          date: date,
+          present: r.present
+        }));
+
+      if(toInsert.length > 0){
+        const { error } = await supabase.from('attendance').insert(toInsert);
+        if(error) throw error;
+      }
+
+      // تحديث الكاش
+      this._cache[k] = {};
+      toInsert.forEach(r => { this._cache[k][r.student_id] = r.present; });
+      try{ localStorage.setItem('att_'+k, JSON.stringify(this._cache[k])); }catch{}
+      return { ok: true };
+    }catch(e){
+      console.warn('ATT.saveAll error:', e);
+      return { ok: false, error: e };
+    }
+  },
+
+  // جلب حضور شهر كامل لطالب
+  async loadMonth(studentId, year, month){
+    const monthStr = `${year}-${String(month+1).padStart(2,'0')}`;
+    if(!SB_CONFIGURED){
+      // من localStorage: ابحث في كل الكاش
+      const result = [];
+      Object.entries(this._cache).forEach(([k, map]) => {
+        const date = k.split('|')[1];
+        if(date && date.startsWith(monthStr) && map[studentId] !== undefined){
+          result.push({ date, present: map[studentId] });
+        }
+      });
+      return result;
+    }
+    try{
+      const { data, error } = await supabase
+        .from('attendance')
+        .select('date, present')
+        .eq('student_id', studentId)
+        .like('date', `${monthStr}%`);
+      if(error) throw error;
+      return data || [];
+    }catch(e){
+      console.warn('ATT.loadMonth error:', e);
+      return [];
+    }
+  },
+
+  // جلب حضور يوم واحد لكل الأفواج (للوحة التحكم)
+  async loadDay(date){
+    if(!SB_CONFIGURED){
+      const result = [];
+      Object.entries(this._cache).forEach(([k, map]) => {
+        if(k.endsWith('|'+date)){
+          const classId = k.split('|')[0];
+          Object.entries(map).forEach(([studentId, present]) => {
+            result.push({ studentId, classId, date, present });
+          });
+        }
+      });
+      return result;
+    }
+    try{
+      const { data, error } = await supabase
+        .from('attendance')
+        .select('student_id, class_id, present')
+        .eq('date', date);
+      if(error) throw error;
+      return (data||[]).map(r => ({
+        studentId: r.student_id,
+        classId: r.class_id,
+        date,
+        present: r.present
+      }));
+    }catch(e){
+      console.warn('ATT.loadDay error:', e);
+      return [];
+    }
+  },
+
+  // آخر يوم حضور لفوج (للتحقق من الغياب السابق)
+  async lastSessionAbsent(classId, beforeDate){
+    if(!SB_CONFIGURED){
+      // من الكاش
+      const dates = Object.keys(this._cache)
+        .filter(k => k.startsWith(classId+'|'))
+        .map(k => k.split('|')[1])
+        .filter(d => d < beforeDate)
+        .sort();
+      if(!dates.length) return new Set();
+      const lastDate = dates[dates.length-1];
+      const map = this._cache[this._key(classId, lastDate)] || {};
+      return new Set(Object.entries(map).filter(([,v])=>v===false).map(([id])=>id));
+    }
+    try{
+      const { data, error } = await supabase
+        .from('attendance')
+        .select('student_id, date, present')
+        .eq('class_id', classId)
+        .lt('date', beforeDate)
+        .order('date', { ascending: false })
+        .limit(200);
+      if(error) throw error;
+      if(!data || !data.length) return new Set();
+      const lastDate = data[0].date;
+      return new Set(
+        data.filter(r => r.date === lastDate && r.present === false).map(r => r.student_id)
+      );
+    }catch(e){
+      console.warn('ATT.lastSessionAbsent error:', e);
+      return new Set();
+    }
+  },
+
+  // إحصائيات طالب لشهر (للتقويم)
+  countMonth(monthData){
+    const p = monthData.filter(r => r.present === true).length;
+    const ab = monthData.filter(r => r.present === false).length;
+    return { present: p, absent: ab, rate: p+ab > 0 ? Math.round(p/(p+ab)*100) : 0 };
+  },
+
+  // DB.get('attendance') compatibility shim — يستخدمه الكود القديم
+  getAll(){
+    const result = [];
+    Object.entries(this._cache).forEach(([k, map]) => {
+      const [classId, date] = k.split('|');
+      Object.entries(map).forEach(([studentId, present]) => {
+        result.push({ studentId, classId, date, present });
+      });
+    });
+    return result;
+  }
+};
+
+// Override DB.get('attendance') to use ATT cache
+const _origDBget = DB.get.bind(DB);
+DB.get = function(k){
+  if(k === 'attendance') return ATT.getAll();
+  return _origDBget(k);
 };
 
 // ══════════════════════════════════════════════════
@@ -516,11 +792,41 @@ function startRealtime(){
       { event: "*", schema: "public", table: "amouri_store" },
       (payload) => {
         if(payload.new && payload.new.key){
-          STORE[payload.new.key] = payload.new.value;
+          const k = payload.new.key;
+          // لا نحدث attendance من amouri_store (لها جدول مستقل)
+          if(k !== 'attendance'){
+            STORE[k] = payload.new.value;
+          }
         }
         if(typeof currentUser !== "undefined" && currentUser && typeof setPage !== "undefined" && currentPage &&
            document.getElementById('app') && document.getElementById('app').style.display !== 'none'){
+          // لا تعيد تحميل صفحة الحضور تلقائياً
+          if(currentPage === 'take-att') return;
           try{ if(window._refreshPage) window._refreshPage(); else setPage(currentPage); }catch(e){}
+        }
+      }
+    )
+    .subscribe();
+
+  // قناة منفصلة لجدول attendance
+  supabase
+    .channel("amouri_attendance_rt")
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "attendance" },
+      (payload) => {
+        // تحديث الكاش فقط بدون إعادة تحميل كامل
+        const row = payload.new || payload.old;
+        if(!row) return;
+        const k = ATT._key(row.class_id, row.date);
+        if(!ATT._cache[k]) ATT._cache[k] = {};
+        if(payload.eventType === 'DELETE'){
+          delete ATT._cache[k][row.student_id];
+        } else {
+          ATT._cache[k][row.student_id] = row.present;
+        }
+        // تحديث الواجهة فقط إذا لم يكن المعلم يسجل الحضور الآن
+        if(typeof currentUser !== "undefined" && currentUser && currentPage !== 'take-att'){
+          try{ if(window._refreshPage) window._refreshPage(); }catch(e){}
         }
       }
     )
@@ -758,15 +1064,34 @@ function setPage(p){
     classes:pageClasses, students:pageStudents,
     stats:pageStats, audit:pageAudit, settings:pageSettings,
   };
-  if(pages[p]) document.getElementById('page-content').innerHTML=pages[p]();
-  else document.getElementById('page-content').innerHTML='<div style="text-align:center;padding:60px;color:var(--sub)">🚧 قيد التطوير</div>';
-  if(p==='take-att') initAttMap();
+  if(p==='take-att'){
+    // تحميل الحضور بشكل async ثم عرض الصفحة
+    const today = todayStr();
+    window._attMapDate = today;
+    window._attMap = window._attMap || {};
+    window._lastAbsent = window._lastAbsent || new Set();
+    window._attPage = 0; // reset pagination
+    document.getElementById('page-content').innerHTML = pages['take-att']();
+    // ثم تحميل البيانات الحقيقية
+    (async()=>{
+      await initAttMap(today);
+      window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, today);
+      if(document.getElementById('page-content') && currentPage==='take-att'){
+        document.getElementById('page-content').innerHTML = pageTakeAtt();
+      }
+    })();
+  } else if(pages[p]){
+    document.getElementById('page-content').innerHTML=pages[p]();
+  } else {
+    document.getElementById('page-content').innerHTML='<div style="text-align:center;padding:60px;color:var(--sub)">🚧 قيد التطوير</div>';
+  }
   window._refreshPage = ()=>{
     if(!currentUser) return;
     const pc=document.getElementById('page-content');
     if(!pc) return;
+    // لا تعيد تحميل صفحة الحضور تلقائياً (لتجنب استبدال البيانات الجديدة)
+    if(currentPage==='take-att') return;
     if(pages[currentPage]) pc.innerHTML=pages[currentPage]();
-    if(currentPage==='take-att') initAttMap();
   };
 }
 function toggleMenu(){
@@ -780,19 +1105,18 @@ function toggleMenu(){
 function pageDashboard(){
   const classes=DB.get('classes')||[];
   const students=DB.get('students')||[];
-  const attendance=DB.get('attendance')||[];
+  const attendance=ATT.getAll(); // من الكاش المحلي
   const today=todayStr();
 
   // Filter by teacher's class if teacher
   const myStudents=currentUser.role==='teacher'?students.filter(s=>s.classId===currentUser.classId):students;
-  // Support both old (classId/studentId) and new (cid/sid) field names
-  const todayAtt=attendance.filter(a=>a.date===today&&(currentUser.role==='admin'||(a.classId||a.cid)===currentUser.classId));
+  const todayAtt=attendance.filter(a=>a.date===today&&(currentUser.role==='admin'||a.classId===currentUser.classId));
   const presentToday=todayAtt.filter(a=>a.present).length;
   const absentToday=todayAtt.filter(a=>!a.present).length;
 
   const absentCounts={};
   attendance.filter(a=>!a.present).forEach(a=>{
-    const sid=a.studentId||a.sid;
+    const sid=a.studentId;
     absentCounts[sid]=(absentCounts[sid]||0)+1;
   });
   const filteredStudents=currentUser.role==='teacher'?myStudents:students;
@@ -802,12 +1126,12 @@ function pageDashboard(){
   // Recent attendance rows — show ALL today records
   // Support both old field names (studentId/classId) and new (sid/cid) for compatibility
   const allTodayRecords=todayAtt.map(a=>{
-    const sid=a.studentId||a.sid;
-    const cid=a.classId||a.cid;
+    const sid=a.studentId;
+    const cid=a.classId;
     const s=students.find(st=>st.id===sid);
     const cls=classes.find(c=>c.id===cid);
     if(!s) return null;
-    return {s,cls,present:a.present,savedAt:a.savedAt||a.at||a.date};
+    return {s,cls,present:a.present,savedAt:a.savedAt||a.date};
   }).filter(Boolean);
 
   const presentRows=allTodayRecords.filter(r=>r.present);
@@ -829,7 +1153,7 @@ function pageDashboard(){
 
   const classRows=classes.filter(c=>currentUser.role==='admin'||c.id===currentUser.classId).map(cls=>{
     const clsStudents=students.filter(s=>s.classId===cls.id);
-    const clsToday=todayAtt.filter(a=>(a.classId||a.cid)===cls.id&&a.present).length;
+    const clsToday=todayAtt.filter(a=>(a.classId)===cls.id&&a.present).length;
     const pct=clsStudents.length?Math.round(clsToday/clsStudents.length*100):0;
     return `<div style="margin-bottom:16px">
       <div class="flex-between" style="margin-bottom:6px">
@@ -891,16 +1215,16 @@ function pageDashboard(){
 function showTodayDetail(type){
   const students=DB.get('students')||[];
   const classes=DB.get('classes')||[];
-  const attendance=DB.get('attendance')||[];
+  const attendance=ATT.getAll();
   const today=todayStr();
-  const todayAtt=attendance.filter(a=>a.date===today&&(currentUser.role==='admin'||(a.classId||a.cid)===currentUser.classId));
+  const todayAtt=attendance.filter(a=>a.date===today&&(currentUser.role==='admin'||a.classId===currentUser.classId));
   const filtered=todayAtt.filter(a=>type==='present'?a.present:!a.present);
 
   // Group by class
   const byClass={};
   filtered.forEach(a=>{
-    const sid=a.studentId||a.sid;
-    const cid=a.classId||a.cid;
+    const sid=a.studentId;
+    const cid=a.classId;
     const s=students.find(st=>st.id===sid);
     if(!s) return;
     if(!byClass[cid]) byClass[cid]=[];
@@ -1035,7 +1359,7 @@ function pageClasses(){
   const classes=DB.get('classes')||[];
   const students=DB.get('students')||[];
   const users=DB.get('users')||[];
-  const att=DB.get('attendance')||[];
+  const att=ATT.getAll();
   const today=todayStr();
 
   if(window._selectedClass){
@@ -1340,20 +1664,27 @@ function doEditClass(){
   setPage('classes');
 }
 
-function deleteClass(clsId){
+async function deleteClass(clsId){
   if(!confirm('هل أنت متأكد من حذف هذا الفوج؟ سيتم حذف جميع بياناته.')) return;
   const classes=DB.get('classes')||[];
   const cls=classes.find(c=>c.id===clsId);
+  // 1. حذف الفوج
   DB.set('classes',classes.filter(c=>c.id!==clsId));
-  // Remove teacher
+  // 2. حذف المعلم
   const users=DB.get('users')||[];
   DB.set('users',users.filter(u=>u.classId!==clsId||u.role==='admin'));
-  // Remove students
+  // 3. جمع IDs الطلاب قبل حذفهم
   const students=DB.get('students')||[];
+  const clsStudentIds = students.filter(s=>s.classId===clsId).map(s=>s.id);
   DB.set('students',students.filter(s=>s.classId!==clsId));
-  // Remove attendance
-  const att=DB.get('attendance')||[];
-  DB.set('attendance',att.filter(a=>a.classId!==clsId));
+  // 4. حذف الحضور من الكاش
+  Object.keys(ATT._cache).forEach(k=>{ if(k.startsWith(clsId+'|')) delete ATT._cache[k]; });
+  // 5. حذف الحضور من Supabase
+  if(SB_CONFIGURED && clsStudentIds.length > 0){
+    try{
+      await supabase.from('attendance').delete().eq('class_id', clsId);
+    }catch(e){ console.warn('Delete attendance error:', e); }
+  }
   addAuditLog('حذف فوج',`تم حذف الفوج: ${cls?.name||clsId}`);
   notify('✅ تم حذف الفوج');
   window._selectedClass=null;
@@ -1364,18 +1695,17 @@ function deleteClass(clsId){
 // PAGE: TAKE ATTENDANCE
 // ══════════════════════════════════════════════════
 window._attMap={};
-function initAttMap(){
-  const today=todayStr();
-  const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
-  const att=DB.get('attendance')||[];
-  window._attMap={};
-  att.filter(a=>a.classId===currentUser.classId&&a.date===today).forEach(a=>{
-    window._attMap[a.studentId]=a.present===true?true:a.present===false?false:null;
+async function initAttMap(dateOverride){
+  const date = dateOverride || todayStr();
+  window._attMapDate = date;
+  const map = await ATT.load(currentUser.classId, date);
+  window._attMap = {};
+  Object.entries(map).forEach(([sid, v]) => {
+    window._attMap[sid] = v === true ? true : v === false ? false : null;
   });
-  // leave undefined as null (empty state)
 }
 function pageTakeAtt(){
-  const today=todayStr();
+  const date = window._attMapDate || todayStr();
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
   if(students.length===0) return `
     <div class="topbar"><div class="page-title">✅ تسجيل الحضور</div></div>
@@ -1385,27 +1715,18 @@ function pageTakeAtt(){
       <div style="color:var(--sub)">يرجى التواصل مع الإدارة لإضافة الطلبة</div>
     </div>`;
 
-  const att=DB.get('attendance')||[];
-  // Reload map from saved data
-  const savedMap={};
-  att.filter(a=>a.classId===currentUser.classId&&a.date===today).forEach(a=>savedMap[a.studentId]=a.present);
-  // Merge: use window._attMap if modified, else saved
-  students.forEach(s=>{
-    if(window._attMap[s.id]===undefined){
-      window._attMap[s.id]=savedMap[s.id]!==undefined?savedMap[s.id]:true;
-    }
-  });
+  // window._attMap already loaded by initAttMap
+  if(!window._attMap) window._attMap = {};
+  const lastAbsent = window._lastAbsent || new Set();
 
-  // Find last session date (last date with any record for this class, before today)
-  const classAtt=att.filter(a=>a.classId===currentUser.classId&&a.date<today);
-  const lastDate=classAtt.length?classAtt.map(a=>a.date).sort().pop():null;
-  const lastAbsent=new Set(
-    lastDate?classAtt.filter(a=>a.date===lastDate&&a.present===false).map(a=>a.studentId):[]
-  );
+  // Pagination: عرض 50 طالب في كل مرة
+  const PAGE_SIZE = 50;
+  window._attPage = window._attPage || 0;
+  const visibleStudents = students.slice(0, (window._attPage + 1) * PAGE_SIZE);
+  const hasMore = students.length > visibleStudents.length;
 
-  const cards=students.map(s=>{
+  function renderCard(s){
     const st=window._attMap[s.id];
-    // 3 states: true=present, false=absent, null/undefined=empty
     const present=st===true;
     const absent=st===false;
     const empty=st===null||st===undefined;
@@ -1424,10 +1745,17 @@ function pageTakeAtt(){
         <div class="toggle-dot" id="togdot-${s.id}" style="right:${present?'3px':'calc(100% - 23px)'}"></div>
       </button>
     </div>`;
-  }).join('');
+  }
 
-  const presentCount=Object.values(window._attMap).filter(Boolean).length;
-  const absentCount=students.length-presentCount;
+  const cards = visibleStudents.map(renderCard).join('') +
+    (hasMore ? `<div id="load-more-btn" style="grid-column:1/-1;text-align:center;padding:16px">
+      <button class="btn-sm" style="background:var(--blue)" onclick="loadMoreStudents()">
+        ⬇️ عرض المزيد (${students.length - visibleStudents.length} طالب متبقي)
+      </button>
+    </div>` : '');
+
+  const presentCount=Object.values(window._attMap).filter(v=>v===true).length;
+  const absentCount=Object.values(window._attMap).filter(v=>v===false).length;
 
   return `
   <div class="topbar">
@@ -1460,17 +1788,16 @@ function pageTakeAtt(){
     <div class="grid-auto" id="students-cards">${cards}</div>
   </div>`;
 }
-function changeAttDate(date){
-  // Load existing attendance for the selected date
-  const att=DB.get('attendance')||[];
-  window._attMap={};
-  att.filter(a=>a.classId===currentUser.classId&&a.date===date).forEach(a=>{
-    window._attMap[a.studentId]=a.present===true?true:a.present===false?false:null;
-  });
-  const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
-  students.forEach(s=>{ if(window._attMap[s.id]===undefined) window._attMap[s.id]=true; });
-  document.getElementById('page-content').innerHTML=pageTakeAtt();
-  document.getElementById('att-date').value=date;
+async function changeAttDate(date){
+  showSplash('⏳ جاري تحميل بيانات الحضور...');
+  await initAttMap(date);
+  window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, date);
+  hideSplash();
+  if(document.getElementById('page-content')){
+    document.getElementById('page-content').innerHTML=pageTakeAtt();
+    const el = document.getElementById('att-date');
+    if(el) el.value=date;
+  }
 }
 function toggleStudent(id){
   const cur=window._attMap[id];
@@ -1501,18 +1828,62 @@ function markAll(val){
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
   students.forEach(s=>{ window._attMap[s.id]=val; _updateStudentCard(s.id); });
 }
-function saveAttendance(){
+function loadMoreStudents(){
+  window._attPage = (window._attPage||0) + 1;
+  const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
+  const PAGE_SIZE = 50;
+  const lastAbsent = window._lastAbsent || new Set();
+  const start = window._attPage * PAGE_SIZE;
+  const newStudents = students.slice(start, start + PAGE_SIZE);
+  const hasMore = students.length > (window._attPage+1)*PAGE_SIZE;
+  const container = document.getElementById('students-cards');
+  if(!container) return;
+  // Remove load-more button
+  document.getElementById('load-more-btn')?.remove();
+  // Append new cards
+  newStudents.forEach(s=>{
+    const st=window._attMap[s.id];
+    const present=st===true, absent=st===false, empty=st===null||st===undefined;
+    const bc=empty?'var(--border)':present?'#10b981':'#ef4444';
+    const bg=empty?'transparent':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
+    const icon=empty?'⬜':present?'✅':'❌';
+    const wasAbsent=lastAbsent.has(s.id);
+    const div=document.createElement('div');
+    div.className='student-att-card'; div.id='scard-'+s.id;
+    div.style.cssText=`border-color:${bc};background:${bg}`;
+    div.innerHTML=`${avatar(s.av,s.color,38)}<div style="flex:1"><div style="font-weight:700;font-size:14px">${s.name}${wasAbsent?` <span style="background:#fef3c7;color:#b45309;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:700;margin-right:4px">غاب الحصة الماضية</span>`:''}</div><div style="font-size:11.5px;color:var(--sub)">📱 ${s.phone||'—'}</div></div><span id="att-icon-${s.id}" style="font-size:18px;margin-left:6px">${icon}</span><button class="toggle" id="tog-${s.id}" style="background:${present?'var(--green)':absent?'#ef4444':'#d1d5db'}" onclick="toggleStudent('${s.id}')"><div class="toggle-dot" id="togdot-${s.id}" style="right:${present?'3px':'calc(100% - 23px)'}"></div></button>`;
+    container.appendChild(div);
+  });
+  if(hasMore){
+    const more=document.createElement('div');
+    more.id='load-more-btn'; more.style.cssText='grid-column:1/-1;text-align:center;padding:16px';
+    more.innerHTML=`<button class="btn-sm" style="background:var(--blue)" onclick="loadMoreStudents()">⬇️ عرض المزيد (${students.length-(window._attPage+1)*PAGE_SIZE} طالب متبقي)</button>`;
+    container.appendChild(more);
+  }
+}
+async function saveAttendance(){
   const dateEl=document.getElementById('att-date');
   const date=dateEl?dateEl.value:todayStr();
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
-  const all=DB.get('attendance')||[];
-  const filtered=all.filter(a=>!(a.classId===currentUser.classId&&a.date===date));
-  students.forEach(s=>{
-    const st=window._attMap[s.id];
-    if(st===null||st===undefined) return; // skip empty
-    filtered.push({id:`a_${s.id}_${date}`,studentId:s.id,classId:s.classId,date,present:st===true,savedAt:new Date().toISOString()});
-  });
-  DB.set('attendance',filtered);
+
+  // تجميع السجلات من window._attMap
+  const records = students.map(s => ({
+    studentId: s.id,
+    present: window._attMap[s.id] ?? null
+  }));
+
+  const btn = document.querySelector('button[onclick="saveAttendance()"]');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ جاري الحفظ...'; }
+
+  const result = await ATT.saveAll(records, currentUser.classId, date);
+
+  if(btn){ btn.disabled = false; btn.textContent = '💾 حفظ الحضور'; }
+
+  if(!result.ok){
+    notify('❌ فشل الحفظ، يرجى المحاولة مرة أخرى', '#ef4444');
+    return;
+  }
+
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
   notify('✅ تم حفظ الحضور بنجاح');
 }
@@ -1530,14 +1901,22 @@ function pageCalendar(){
   const daysInMonth=new Date(year,month+1,0).getDate();
   const firstDay=new Date(year,month,1).getDay();
   const today=todayStr();
-  const att=DB.get('attendance')||[];
+  // بيانات الشهر من الكاش (محملة مسبقاً)
+  const monthStr=`${year}-${String(month+1).padStart(2,'0')}`;
+  const monthCache = {};
+  Object.entries(ATT._cache).forEach(([k, map]) => {
+    const [cid, date] = k.split('|');
+    if(date && date.startsWith(monthStr) && map[student] !== undefined){
+      monthCache[date] = map[student];
+    }
+  });
 
   const getStatus=day=>{
     if(!student) return '';
     const d=`${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-    const rec=att.find(a=>(a.studentId||a.sid)===student&&a.date===d);
-    if(!rec) return '';
-    return rec.present?'cal-present':'cal-absent';
+    const val = monthCache[d];
+    if(val === undefined) return '';
+    return val ? 'cal-present' : 'cal-absent';
   };
 
   const dayHeaders=arabicDays.map(d=>`<div class="cal-day-header">${d}</div>`).join('');
@@ -1554,9 +1933,9 @@ function pageCalendar(){
   let statsHtml='';
   if(student){
     const monthStr=`${year}-${String(month+1).padStart(2,'0')}`;
-    const mAtt=att.filter(a=>(a.studentId||a.sid)===student&&a.date.startsWith(monthStr));
-    const p=mAtt.filter(a=>a.present).length;
-    const ab=mAtt.filter(a=>!a.present).length;
+    const mEntries = Object.entries(monthCache);
+    const p=mEntries.filter(([,v])=>v===true).length;
+    const ab=mEntries.filter(([,v])=>v===false).length;
     statsHtml=`<div class="flex-wrap" style="margin-bottom:14px">
       ${badge('✅ حاضر: '+p+' يوم','green')}
       ${badge('❌ غائب: '+ab+' يوم','red')}
@@ -1595,34 +1974,32 @@ function calNav(dir){
   document.getElementById('page-content').innerHTML=pageCalendar();
 }
 function calSetStudent(id){window._calState.student=id;document.getElementById('page-content').innerHTML=pageCalendar();}
-function calToggleDay(day){
+async function calToggleDay(day){
   const {year,month,student}=window._calState;
   if(!student){notify('⚠️ يرجى اختيار طالب أولاً','#f59e0b');return;}
   const dateStr=`${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-  const all=DB.get('attendance')||[];
   const students=DB.get('students')||[];
   const s=students.find(st=>st.id===student);
-  const idx=all.findIndex(a=>(a.studentId||a.sid)===student&&a.date===dateStr);
-  if(idx>=0){
-    const rec=all[idx];
-    // cycle: حاضر -> غائب -> فارغ(حذف السجل)
-    if(rec.present===true){rec.present=false;}
-    else if(rec.present===false){
-      all.splice(idx,1);
-      DB.set('attendance',all);
-      addAuditLog('تعديل حضور',`تعديل حضور ${s?.name||''} ليوم ${dateStr}`);
-      notify('⬜ تم مسح الحضور');
-      document.getElementById('page-content').innerHTML=pageCalendar();
-      return;
-    } else {rec.present=true;}
-  } else {
-    // أول ضغطة: حاضر
-    all.push({id:`a_${student}_${dateStr}`,studentId:student,classId:s?.classId,date:dateStr,present:true,savedAt:new Date().toISOString()});
+  if(!s) return;
+
+  // الحالة الحالية من الكاش
+  const k = ATT._key(s.classId, dateStr);
+  const cur = ATT._cache[k]?.[student];
+
+  let newVal;
+  if(cur === undefined) newVal = true;       // فارغ -> حاضر
+  else if(cur === true) newVal = false;       // حاضر -> غائب
+  else newVal = null;                         // غائب -> فارغ (حذف)
+
+  const result = await ATT.save(student, s.classId, dateStr, newVal);
+  if(!result.ok){
+    notify('❌ فشل التحديث','#ef4444');
+    return;
   }
-  DB.set('attendance',all);
+
+  const label = newVal===true?'✅ حاضر':newVal===false?'❌ غائب':'⬜ تم المسح';
+  notify(label);
   addAuditLog('تعديل حضور',`تعديل حضور ${s?.name||''} ليوم ${dateStr}`);
-  const rec2=all.find(a=>(a.studentId||a.sid)===student&&a.date===dateStr);
-  notify(rec2?.present?'✅ حاضر':'❌ غائب');
   document.getElementById('page-content').innerHTML=pageCalendar();
 }
 
@@ -1634,7 +2011,7 @@ window._studentFilter='';
 function pageStudents(){
   const classes=DB.get('classes')||[];
   const allStudents=DB.get('students')||[];
-  const att=DB.get('attendance')||[];
+  const att=ATT.getAll();
   const filterClassId=currentUser.role==='teacher'?currentUser.classId:(window._studentFilter||'');
   let students=allStudents;
   if(filterClassId) students=students.filter(s=>s.classId===filterClassId);
@@ -1677,10 +2054,22 @@ function pageStudents(){
     </div>
   </div>`;
 }
-function deleteStudent(id){
+async function deleteStudent(id){
   if(!confirm('هل أنت متأكد من حذف هذا الطالب؟')) return;
-  DB.set('students',(DB.get('students')||[]).filter(s=>s.id!==id));
-  addAuditLog('حذف طالب','تم حذف طالب');
+  const students = DB.get('students')||[];
+  const s = students.find(st=>st.id===id);
+  DB.set('students', students.filter(st=>st.id!==id));
+  // حذف حضوره من الكاش
+  Object.keys(ATT._cache).forEach(k=>{
+    if(ATT._cache[k][id] !== undefined) delete ATT._cache[k][id];
+  });
+  // حذف حضوره من Supabase
+  if(SB_CONFIGURED){
+    try{
+      await supabase.from('attendance').delete().eq('student_id', id);
+    }catch(e){ console.warn('Delete student attendance error:', e); }
+  }
+  addAuditLog('حذف طالب',`تم حذف الطالب: ${s?.name||id}`);
   notify('✅ تم حذف الطالب');
   document.getElementById('page-content').innerHTML=pageStudents();
 }
@@ -1727,7 +2116,7 @@ function doAddStudent(color){
 function pageStats(){
   const classes=DB.get('classes')||[];
   const allStudents=DB.get('students')||[];
-  const att=DB.get('attendance')||[];
+  const att=ATT.getAll();
   const students=currentUser.role==='teacher'?allStudents.filter(s=>s.classId===currentUser.classId):allStudents;
   const filtAtt=currentUser.role==='teacher'?att.filter(a=>a.classId===currentUser.classId):att;
   const absentCounts={};
@@ -1768,7 +2157,8 @@ function pageStats(){
   return `
   <div class="topbar">
     <div class="page-title">📊 الإحصائيات</div>
-    <button class="btn" onclick="exportCSV()">📤 تصدير CSV</button>
+    <button class="btn" onclick="exportCSV()">📊 تصدير CSV</button>
+    <button class="btn" style="background:#8b5cf6" onclick="exportJSON()">💾 نسخة احتياطية JSON</button>
   </div>
   <div class="stats-row">
     ${[
@@ -1793,20 +2183,46 @@ function pageStats(){
 function exportCSV(){
   const students=DB.get('students')||[];
   const classes=DB.get('classes')||[];
-  const att=DB.get('attendance')||[];
-  const absentCounts={};
-  att.filter(a=>!a.present).forEach(a=>absentCounts[a.studentId]=(absentCounts[a.studentId]||0)+1);
-  const rows=[['الاسم','الفوج','إجمالي الغياب','الحالة']];
+  const att=ATT.getAll();
+  // حساب الحضور والغياب لكل طالب
+  const presentCounts={}, absentCounts={};
+  att.forEach(a=>{
+    if(a.present===true) presentCounts[a.studentId]=(presentCounts[a.studentId]||0)+1;
+    else if(a.present===false) absentCounts[a.studentId]=(absentCounts[a.studentId]||0)+1;
+  });
+  const rows=[['الاسم','الفوج','إجمالي الحضور','إجمالي الغياب','نسبة الحضور','الحالة']];
   students.forEach(s=>{
     const cls=classes.find(c=>c.id===s.classId);
+    const pres=presentCounts[s.id]||0;
     const abs=absentCounts[s.id]||0;
-    rows.push([s.name,cls?.name||'',abs,abs>=5?'في خطر':'ملتزم']);
+    const total=pres+abs;
+    const rate=total>0?Math.round(pres/total*100)+'%':'—';
+    const status=abs>=5?'في خطر':abs>=3?'تحت المراقبة':'ملتزم';
+    rows.push([`"${s.name}"`,`"${cls?.name||''}"`,pres,abs,rate,status]);
   });
   const csv=rows.map(r=>r.join(',')).join('\n');
   const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);a.download='تقرير_الغياب.csv';a.click();
-  notify('✅ تم تصدير التقرير');
+  a.href=URL.createObjectURL(blob);
+  a.download=`تقرير_الحضور_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  notify('✅ تم تصدير تقرير CSV');
+}
+
+function exportJSON(){
+  const data={
+    exportDate: new Date().toISOString(),
+    school: 'مدرسة عموري للقرآن الكريم',
+    classes: DB.get('classes')||[],
+    students: (DB.get('students')||[]).map(s=>({...s, password:undefined})),
+    attendance: ATT.getAll(),
+  };
+  const blob=new Blob([JSON.stringify(data, null, 2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`نسخة_احتياطية_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  notify('✅ تم تصدير النسخة الاحتياطية JSON');
 }
 
 // ══════════════════════════════════════════════════
@@ -1848,10 +2264,10 @@ Object.assign(window, {
   pageClasses, showCreateClassModal, doCreateClass, deleteClass, showEditCredsModal, doEditCreds,
   showEditClassModal, doEditClass, selectEditColor,
   showCredsModal, selectColor,
-  pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, saveAttendance,
+  pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, saveAttendance, loadMoreStudents,
   pageCalendar, calNav, calSetStudent, calToggleDay,
   pageStudents, deleteStudent, showAddStudentModal, doAddStudent,
-  pageStats, exportCSV,
+  pageStats, exportCSV, exportJSON,
   pageAudit,
   copyText, notify,
   loadSavedCredentials, loadLogo,
