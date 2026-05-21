@@ -472,6 +472,17 @@ async function loadAllFromSupabase(){
     // fallback to localStorage if offline
     KEYS.forEach(k=>{ if(STORE[k]==null){ try{ STORE[k]=JSON.parse(localStorage.getItem('amouri_'+k)); }catch{} } });
   }
+  // Preload today's ATT cache from localStorage backup
+  try{
+    const today = todayStr();
+    const keys = Object.keys(localStorage).filter(k=>k.startsWith('att_'));
+    keys.forEach(k=>{
+      const cacheKey = k.replace('att_','');
+      if(!ATT._cache[cacheKey]){
+        try{ ATT._cache[cacheKey] = JSON.parse(localStorage.getItem(k)); }catch{}
+      }
+    });
+  }catch{}
 }
 
 function saveToSupabase(k, v){
@@ -842,6 +853,52 @@ if(SB_CONFIGURED){
 await loadAllFromSupabase();
 hideSplash();
 DB.init();
+
+// ═══════════════════════════════════════════════════════
+// MIGRATION: تحميل الحضور القديم من amouri_store إلى ATT
+// (للحفاظ على البيانات القديمة قبل النظام الجديد)
+// ═══════════════════════════════════════════════════════
+(function migrateOldAttendance(){
+  try{
+    const oldAtt = STORE['attendance'];
+    if(!oldAtt || !Array.isArray(oldAtt) || oldAtt.length === 0) return;
+    console.log(`Migration: found ${oldAtt.length} old attendance records`);
+    oldAtt.forEach(a => {
+      const sid = a.studentId || a.sid;
+      const cid = a.classId || a.cid;
+      const date = a.date;
+      const present = a.present;
+      if(!sid || !cid || !date || present === undefined) return;
+      const k = ATT._key(cid, date);
+      if(!ATT._cache[k]) ATT._cache[k] = {};
+      ATT._cache[k][sid] = present;
+    });
+    console.log('Migration: old attendance loaded into ATT cache');
+    // If Supabase configured, migrate to new table in background
+    if(SB_CONFIGURED && oldAtt.length > 0){
+      (async()=>{
+        try{
+          const toInsert = oldAtt
+            .filter(a => (a.studentId||a.sid) && (a.classId||a.cid) && a.date && a.present !== undefined)
+            .map(a => ({
+              student_id: a.studentId||a.sid,
+              class_id: a.classId||a.cid,
+              date: a.date,
+              present: a.present === true
+            }));
+          if(toInsert.length === 0) return;
+          // Insert in batches of 100
+          for(let i=0; i<toInsert.length; i+=100){
+            const batch = toInsert.slice(i, i+100);
+            await supabase.from('attendance').upsert(batch, {onConflict:'student_id,class_id,date', ignoreDuplicates:true});
+          }
+          console.log(`Migration: ${toInsert.length} records migrated to Supabase attendance table`);
+        }catch(e){ console.warn('Migration error:', e); }
+      })();
+    }
+  }catch(e){ console.warn('Migration failed:', e); }
+})();
+
 startRealtime();
 
 // expose globals needed by inline onclick handlers
@@ -1074,10 +1131,19 @@ function setPage(p){
     document.getElementById('page-content').innerHTML = pages['take-att']();
     // ثم تحميل البيانات الحقيقية
     (async()=>{
-      await initAttMap(today);
-      window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, today);
+      try{
+        await initAttMap(today);
+        window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, today);
+      }catch(e){
+        console.warn('initAttMap error:', e);
+        window._attMap = window._attMap || {};
+        window._lastAbsent = new Set();
+      }
       if(document.getElementById('page-content') && currentPage==='take-att'){
         document.getElementById('page-content').innerHTML = pageTakeAtt();
+        // Set date input
+        const el = document.getElementById('att-date');
+        if(el) el.value = today;
       }
     })();
   } else if(pages[p]){
@@ -1715,8 +1781,15 @@ function pageTakeAtt(){
       <div style="color:var(--sub)">يرجى التواصل مع الإدارة لإضافة الطلبة</div>
     </div>`;
 
-  // window._attMap already loaded by initAttMap
-  if(!window._attMap) window._attMap = {};
+  // إذا كان window._attMap غير محمل بعد، أظهر رسالة تحميل
+  if(!window._attMap || window._attMapDate !== date){
+    return `
+    <div class="topbar"><div class="page-title">✅ تسجيل الحضور</div></div>
+    <div class="card" style="text-align:center;padding:50px">
+      <div style="font-size:48px;margin-bottom:12px">⏳</div>
+      <div style="font-weight:700;margin-bottom:8px">جاري تحميل بيانات الحضور...</div>
+    </div>`;
+  }
   const lastAbsent = window._lastAbsent || new Set();
 
   // Pagination: عرض 50 طالب في كل مرة
@@ -1762,7 +1835,7 @@ function pageTakeAtt(){
     <div><div class="page-title">✅ تسجيل الحضور</div>
       <div class="page-sub">${currentUser.class?.name||''}</div></div>
     <div class="topbar-actions">
-      <input type="date" id="att-date" value="${today}" class="input" style="width:auto" onchange="changeAttDate(this.value)">
+      <input type="date" id="att-date" value="${date}" class="input" style="width:auto" onchange="changeAttDate(this.value)">
       <button class="btn" onclick="saveAttendance()">💾 حفظ الحضور</button>
     </div>
   </div>
@@ -2159,6 +2232,7 @@ function pageStats(){
     <div class="page-title">📊 الإحصائيات</div>
     <button class="btn" onclick="exportCSV()">📊 تصدير CSV</button>
     <button class="btn" style="background:#8b5cf6" onclick="exportJSON()">💾 نسخة احتياطية JSON</button>
+    <button class="btn" style="background:#0d9488" onclick="importJSON()">📥 استيراد JSON</button>
   </div>
   <div class="stats-row">
     ${[
@@ -2225,6 +2299,106 @@ function exportJSON(){
   notify('✅ تم تصدير النسخة الاحتياطية JSON');
 }
 
+function importJSON(){
+  // إنشاء input مخفي لاختيار الملف
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if(!file) return;
+    try{
+      const text = await file.text();
+      const data = JSON.parse(text);
+      // التحقق من صحة الملف
+      if(!data.classes && !data.students && !data.attendance){
+        notify('❌ الملف غير صالح — يرجى استخدام ملف نسخة احتياطية صحيح', '#ef4444');
+        return;
+      }
+      const confirmed = confirm(
+        `هل أنت متأكد من استيراد النسخة الاحتياطية؟\n\n` +
+        `📅 تاريخ النسخة: ${data.exportDate ? new Date(data.exportDate).toLocaleDateString('ar-DZ') : 'غير معروف'}\n` +
+        `🏫 عدد الأفواج: ${(data.classes||[]).length}\n` +
+        `👥 عدد الطلبة: ${(data.students||[]).length}\n` +
+        `📋 عدد سجلات الحضور: ${(data.attendance||[]).length}\n\n` +
+        `⚠️ تنبيه: سيتم استيراد البيانات المفقودة فقط، لن يتم حذف أي بيانات موجودة.`
+      );
+      if(!confirmed) return;
+
+      notify('⏳ جاري الاستيراد...', '#f59e0b');
+
+      // استيراد الأفواج (إضافة المفقودة فقط)
+      if(data.classes && data.classes.length > 0){
+        const existing = DB.get('classes')||[];
+        const existingIds = new Set(existing.map(c=>c.id));
+        const toAdd = data.classes.filter(c => !existingIds.has(c.id));
+        if(toAdd.length > 0) DB.set('classes', [...existing, ...toAdd]);
+      }
+
+      // استيراد الطلبة (إضافة المفقودين فقط)
+      if(data.students && data.students.length > 0){
+        const existing = DB.get('students')||[];
+        const existingIds = new Set(existing.map(s=>s.id));
+        const toAdd = data.students.filter(s => !existingIds.has(s.id));
+        if(toAdd.length > 0) DB.set('students', [...existing, ...toAdd]);
+      }
+
+      // استيراد الحضور
+      if(data.attendance && data.attendance.length > 0){
+        // تحديث الكاش المحلي
+        data.attendance.forEach(a => {
+          const sid = a.studentId || a.sid;
+          const cid = a.classId || a.cid;
+          const date = a.date;
+          if(!sid || !cid || !date) return;
+          const k = ATT._key(cid, date);
+          if(!ATT._cache[k]) ATT._cache[k] = {};
+          if(ATT._cache[k][sid] === undefined){
+            ATT._cache[k][sid] = a.present;
+          }
+        });
+
+        // رفع الحضور لـ Supabase في الخلفية
+        if(SB_CONFIGURED){
+          (async()=>{
+            try{
+              const toInsert = data.attendance
+                .filter(a => (a.studentId||a.sid) && (a.classId||a.cid) && a.date && a.present !== undefined)
+                .map(a => ({
+                  student_id: a.studentId||a.sid,
+                  class_id: a.classId||a.cid,
+                  date: a.date,
+                  present: a.present === true
+                }));
+              for(let i=0; i<toInsert.length; i+=100){
+                await supabase.from('attendance')
+                  .upsert(toInsert.slice(i, i+100), {onConflict:'student_id,class_id,date', ignoreDuplicates:true});
+              }
+              notify('✅ تم استيراد النسخة الاحتياطية بنجاح');
+            }catch(err){
+              console.warn('Import attendance error:', err);
+              notify('⚠️ تم استيراد الأفواج والطلبة لكن حدث خطأ في الحضور', '#f59e0b');
+            }
+          })();
+        } else {
+          notify('✅ تم استيراد النسخة الاحتياطية بنجاح');
+        }
+      } else {
+        notify('✅ تم استيراد النسخة الاحتياطية بنجاح');
+      }
+
+      addAuditLog('استيراد نسخة احتياطية', `تم استيراد ${(data.classes||[]).length} فوج و${(data.students||[]).length} طالب`);
+      // تحديث الصفحة
+      setTimeout(()=>setPage('stats'), 1500);
+
+    }catch(err){
+      console.error('Import error:', err);
+      notify('❌ خطأ في قراءة الملف — تأكد أنه ملف JSON صحيح', '#ef4444');
+    }
+  };
+  input.click();
+}
+
 // ══════════════════════════════════════════════════
 // PAGE: AUDIT LOG
 // ══════════════════════════════════════════════════
@@ -2267,7 +2441,7 @@ Object.assign(window, {
   pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, saveAttendance, loadMoreStudents,
   pageCalendar, calNav, calSetStudent, calToggleDay,
   pageStudents, deleteStudent, showAddStudentModal, doAddStudent,
-  pageStats, exportCSV, exportJSON,
+  pageStats, exportCSV, exportJSON, importJSON,
   pageAudit,
   copyText, notify,
   loadSavedCredentials, loadLogo,
