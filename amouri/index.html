@@ -622,12 +622,10 @@ const ATT = {
     }
 
     try{
-      // أولاً: حذف سجلات هذا اليوم لهذا الفوج
-      await supabase.from('attendance').delete()
-        .eq('class_id', classId).eq('date', date);
+      // استخدام UPSERT فقط — بدون DELETE لتجنب مشكلة التزامن بين المعلمين
+      // كل أستاذ له classId مستقل، لكن DELETE+INSERT يسبب فراغ زمني خطير
 
-      // ثانياً: إدخال السجلات الجديدة فقط (بدون الفارغة)
-      const toInsert = records
+      const toUpsert = records
         .filter(r => r.present !== null && r.present !== undefined)
         .map(r => ({
           student_id: r.studentId,
@@ -636,14 +634,31 @@ const ATT = {
           present: r.present
         }));
 
-      if(toInsert.length > 0){
-        const { error } = await supabase.from('attendance').insert(toInsert);
+      // حذف فقط الطلاب الذين أصبحوا "فارغين" (null) — أي تم مسح حضورهم
+      const toDelete = records
+        .filter(r => r.present === null || r.present === undefined)
+        .map(r => r.studentId);
+
+      // تنفيذ UPSERT للطلاب الذين لهم حالة
+      if(toUpsert.length > 0){
+        const { error } = await supabase.from('attendance')
+          .upsert(toUpsert, { onConflict: 'student_id,class_id,date' });
+        if(error) throw error;
+      }
+
+      // حذف السجلات الفارغة فرداً فرداً
+      if(toDelete.length > 0){
+        const { error } = await supabase.from('attendance')
+          .delete()
+          .eq('class_id', classId)
+          .eq('date', date)
+          .in('student_id', toDelete);
         if(error) throw error;
       }
 
       // تحديث الكاش
       this._cache[k] = {};
-      toInsert.forEach(r => { this._cache[k][r.student_id] = r.present; });
+      toUpsert.forEach(r => { this._cache[k][r.student_id] = r.present; });
       try{ localStorage.setItem('att_'+k, JSON.stringify(this._cache[k])); }catch{}
       return { ok: true };
     }catch(e){
@@ -835,10 +850,12 @@ function startRealtime(){
         } else {
           ATT._cache[k][row.student_id] = row.present;
         }
-        // تحديث الواجهة فقط إذا لم يكن المعلم يسجل الحضور الآن
+        // لا تحدث واجهة تسجيل الحضور تلقائياً أبداً — المعلم قد يكون يسجل الآن
+        // فقط حدث لوحة التحكم والصفحات الأخرى
         if(typeof currentUser !== "undefined" && currentUser && currentPage !== 'take-att'){
           try{ if(window._refreshPage) window._refreshPage(); }catch(e){}
         }
+        // لا تلمس window._attMap هنا أبداً — سيُحمَّل فقط عند فتح صفحة الحضور من جديد
       }
     )
     .subscribe();
@@ -1044,6 +1061,12 @@ function doLogin(){
 }
 function doLogout(){
   currentUser=null;
+  // إعادة تعيين بيانات الحضور عند الخروج
+  window._attMap = {};
+  window._attMapDate = null;
+  window._attLoadedOnce = false;
+  window._attPage = 0;
+  window._lastAbsent = new Set();
   // مسح بيانات الدخول المحفوظة عند الخروج لحماية الخصوصية
   localStorage.removeItem('amouri_local_creds');
   document.getElementById('l-email').value='';
@@ -1124,28 +1147,37 @@ function setPage(p){
   if(p==='take-att'){
     // تحميل الحضور بشكل async ثم عرض الصفحة
     const today = todayStr();
-    window._attMapDate = today;
-    window._attMap = window._attMap || {};
-    window._lastAbsent = window._lastAbsent || new Set();
-    window._attPage = 0; // reset pagination
-    document.getElementById('page-content').innerHTML = pages['take-att']();
-    // ثم تحميل البيانات الحقيقية
-    (async()=>{
-      try{
-        await initAttMap(today);
-        window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, today);
-      }catch(e){
-        console.warn('initAttMap error:', e);
-        window._attMap = window._attMap || {};
-        window._lastAbsent = new Set();
-      }
-      if(document.getElementById('page-content') && currentPage==='take-att'){
-        document.getElementById('page-content').innerHTML = pageTakeAtt();
-        // Set date input
-        const el = document.getElementById('att-date');
-        if(el) el.value = today;
-      }
-    })();
+    // إذا كان المعلم عاد لصفحة الحضور وبيانات اليوم محملة بالفعل، لا تعيد التحميل
+    const alreadyLoaded = window._attMapDate === today && window._attLoadedOnce === true;
+    if(alreadyLoaded){
+      document.getElementById('page-content').innerHTML = pageTakeAtt();
+      const el = document.getElementById('att-date');
+      if(el) el.value = today;
+    } else {
+      window._attMapDate = today;
+      window._attMap = {};
+      window._lastAbsent = new Set();
+      window._attPage = 0;
+      window._attLoadedOnce = false;
+      document.getElementById('page-content').innerHTML = pages['take-att']();
+      (async()=>{
+        try{
+          await initAttMap(today);
+          window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, today);
+          window._attLoadedOnce = true;
+        }catch(e){
+          console.warn('initAttMap error:', e);
+          window._attMap = window._attMap || {};
+          window._lastAbsent = new Set();
+          window._attLoadedOnce = true;
+        }
+        if(document.getElementById('page-content') && currentPage==='take-att'){
+          document.getElementById('page-content').innerHTML = pageTakeAtt();
+          const el = document.getElementById('att-date');
+          if(el) el.value = today;
+        }
+      })();
+    }
   } else if(pages[p]){
     document.getElementById('page-content').innerHTML=pages[p]();
   } else {
@@ -1863,8 +1895,11 @@ function pageTakeAtt(){
 }
 async function changeAttDate(date){
   showSplash('⏳ جاري تحميل بيانات الحضور...');
+  window._attLoadedOnce = false;
+  window._attPage = 0;
   await initAttMap(date);
   window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, date);
+  window._attLoadedOnce = true;
   hideSplash();
   if(document.getElementById('page-content')){
     document.getElementById('page-content').innerHTML=pageTakeAtt();
@@ -1957,6 +1992,8 @@ async function saveAttendance(){
     return;
   }
 
+  // بعد الحفظ الناجح، ابقِ البيانات المحلية كما هي (لا تعيد التحميل)
+  window._attLoadedOnce = true;
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
   notify('✅ تم حفظ الحضور بنجاح');
 }
