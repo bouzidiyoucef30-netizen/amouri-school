@@ -622,11 +622,11 @@ const ATT = {
     }
 
     try{
-      // استخدام UPSERT فقط — بدون DELETE لتجنب مشكلة التزامن بين المعلمين
-      // كل أستاذ له classId مستقل، لكن DELETE+INSERT يسبب فراغ زمني خطير
-
+      // UPSERT فقط — لا DELETE أبداً
+      // null = لم يُسجَّل في هذه الجلسة → نتجاهله ولا نمسحه من Supabase
+      // هذا يحمي بيانات الأساتذة الآخرين تماماً
       const toUpsert = records
-        .filter(r => r.present !== null && r.present !== undefined)
+        .filter(r => r.present === true || r.present === false)
         .map(r => ({
           student_id: r.studentId,
           class_id: classId,
@@ -634,30 +634,13 @@ const ATT = {
           present: r.present
         }));
 
-      // حذف فقط الطلاب الذين أصبحوا "فارغين" (null) — أي تم مسح حضورهم
-      const toDelete = records
-        .filter(r => r.present === null || r.present === undefined)
-        .map(r => r.studentId);
-
-      // تنفيذ UPSERT للطلاب الذين لهم حالة
       if(toUpsert.length > 0){
         const { error } = await supabase.from('attendance')
           .upsert(toUpsert, { onConflict: 'student_id,class_id,date' });
         if(error) throw error;
       }
 
-      // حذف السجلات الفارغة فرداً فرداً
-      if(toDelete.length > 0){
-        const { error } = await supabase.from('attendance')
-          .delete()
-          .eq('class_id', classId)
-          .eq('date', date)
-          .in('student_id', toDelete);
-        if(error) throw error;
-      }
-
-      // تحديث الكاش
-      this._cache[k] = {};
+      // تحديث الكاش بما حُفظ فعلاً
       toUpsert.forEach(r => { this._cache[k][r.student_id] = r.present; });
       try{ localStorage.setItem('att_'+k, JSON.stringify(this._cache[k])); }catch{}
       return { ok: true };
@@ -1064,7 +1047,6 @@ function doLogout(){
   // إعادة تعيين بيانات الحضور عند الخروج
   window._attMap = {};
   window._attMapDate = null;
-  window._attLoadedOnce = false;
   window._attPage = 0;
   window._lastAbsent = new Set();
   // مسح بيانات الدخول المحفوظة عند الخروج لحماية الخصوصية
@@ -1145,41 +1127,42 @@ function setPage(p){
     stats:pageStats, audit:pageAudit, settings:pageSettings,
   };
   if(p==='take-att'){
-    // تحميل الحضور بشكل async ثم عرض الصفحة
+    // دائماً أعد التحميل من Supabase عند فتح صفحة الحضور
+    // هذا يضمن أن الأستاذ لا يحفظ بيانات قديمة تمسح بيانات زميله
     const today = todayStr();
-    // إذا كان المعلم عاد لصفحة الحضور وبيانات اليوم محملة بالفعل، لا تعيد التحميل
-    const alreadyLoaded = window._attMapDate === today && window._attLoadedOnce === true;
-    if(alreadyLoaded){
-      document.getElementById('page-content').innerHTML = pageTakeAtt();
-      const el = document.getElementById('att-date');
-      if(el) el.value = today;
-    } else {
-      window._attMapDate = today;
-      window._attMap = {};
-      window._lastAbsent = new Set();
-      window._attPage = 0;
-      window._attLoadedOnce = false;
-      document.getElementById('page-content').innerHTML = pages['take-att']();
-      (async()=>{
-        try{
-          await initAttMap(today);
-          window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, today);
-          window._attLoadedOnce = true;
-        }catch(e){
-          console.warn('initAttMap error:', e);
-          window._attMap = window._attMap || {};
-          window._lastAbsent = new Set();
-          window._attLoadedOnce = true;
-        }
-        if(document.getElementById('page-content') && currentPage==='take-att'){
-          document.getElementById('page-content').innerHTML = pageTakeAtt();
-          const el = document.getElementById('att-date');
-          if(el) el.value = today;
-        }
-      })();
-    }
+    window._attMapDate = today;
+    window._attMap = {};
+    window._lastAbsent = new Set();
+    window._attPage = 0;
+    document.getElementById('page-content').innerHTML = pages['take-att']();
+    (async()=>{
+      try{
+        await initAttMap(today);
+        window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, today);
+      }catch(e){
+        console.warn('initAttMap error:', e);
+        window._attMap = window._attMap || {};
+        window._lastAbsent = new Set();
+      }
+      if(document.getElementById('page-content') && currentPage==='take-att'){
+        document.getElementById('page-content').innerHTML = pageTakeAtt();
+        const el = document.getElementById('att-date');
+        if(el) el.value = today;
+      }
+    })();
   } else if(pages[p]){
-    document.getElementById('page-content').innerHTML=pages[p]();
+    const result = pages[p]();
+    // إذا كانت الصفحة async (مثل Dashboard)
+    if(result && typeof result.then === 'function'){
+      document.getElementById('page-content').innerHTML = '<div style="text-align:center;padding:60px;color:var(--sub)">⏳</div>';
+      result.then(html => {
+        if(currentPage === p && document.getElementById('page-content')){
+          document.getElementById('page-content').innerHTML = html;
+        }
+      }).catch(e => console.warn('page error:', e));
+    } else {
+      document.getElementById('page-content').innerHTML = result;
+    }
   } else {
     document.getElementById('page-content').innerHTML='<div style="text-align:center;padding:60px;color:var(--sub)">🚧 قيد التطوير</div>';
   }
@@ -1187,9 +1170,17 @@ function setPage(p){
     if(!currentUser) return;
     const pc=document.getElementById('page-content');
     if(!pc) return;
-    // لا تعيد تحميل صفحة الحضور تلقائياً (لتجنب استبدال البيانات الجديدة)
     if(currentPage==='take-att') return;
-    if(pages[currentPage]) pc.innerHTML=pages[currentPage]();
+    if(!pages[currentPage]) return;
+    const result = pages[currentPage]();
+    if(result && typeof result.then === 'function'){
+      result.then(html => {
+        if(document.getElementById('page-content') && currentPage !== 'take-att')
+          document.getElementById('page-content').innerHTML = html;
+      }).catch(e => console.warn('refresh error:', e));
+    } else {
+      pc.innerHTML = result;
+    }
   };
 }
 function toggleMenu(){
@@ -1200,15 +1191,21 @@ function toggleMenu(){
 // ══════════════════════════════════════════════════
 // PAGE: DASHBOARD
 // ══════════════════════════════════════════════════
-function pageDashboard(){
+async function pageDashboard(){
   const classes=DB.get('classes')||[];
   const students=DB.get('students')||[];
-  const attendance=ATT.getAll(); // من الكاش المحلي
   const today=todayStr();
+
+  // جلب بيانات اليوم من Supabase مباشرة لضمان رؤية كل الأساتذة
+  let todayFromDB = [];
+  try{ todayFromDB = await ATT.loadDay(today); }catch(e){ todayFromDB = ATT.getAll().filter(a=>a.date===today); }
+
+  // دمج مع الكاش للبيانات القديمة (الإحصائيات الكاملة)
+  const attendance=ATT.getAll();
 
   // Filter by teacher's class if teacher
   const myStudents=currentUser.role==='teacher'?students.filter(s=>s.classId===currentUser.classId):students;
-  const todayAtt=attendance.filter(a=>a.date===today&&(currentUser.role==='admin'||a.classId===currentUser.classId));
+  const todayAtt=todayFromDB.filter(a=>(currentUser.role==='admin'||a.classId===currentUser.classId));
   const presentToday=todayAtt.filter(a=>a.present).length;
   const absentToday=todayAtt.filter(a=>!a.present).length;
 
@@ -1310,12 +1307,17 @@ function pageDashboard(){
 // ══════════════════════════════════════════════════
 // DASHBOARD: Today Detail Modal (present/absent)
 // ══════════════════════════════════════════════════
-function showTodayDetail(type){
+async function showTodayDetail(type){
   const students=DB.get('students')||[];
   const classes=DB.get('classes')||[];
-  const attendance=ATT.getAll();
   const today=todayStr();
-  const todayAtt=attendance.filter(a=>a.date===today&&(currentUser.role==='admin'||a.classId===currentUser.classId));
+  let todayAtt=[];
+  try{ 
+    const all = await ATT.loadDay(today);
+    todayAtt = all.filter(a=>currentUser.role==='admin'||a.classId===currentUser.classId);
+  }catch(e){
+    todayAtt = ATT.getAll().filter(a=>a.date===today&&(currentUser.role==='admin'||a.classId===currentUser.classId));
+  }
   const filtered=todayAtt.filter(a=>type==='present'?a.present:!a.present);
 
   // Group by class
@@ -1895,11 +1897,9 @@ function pageTakeAtt(){
 }
 async function changeAttDate(date){
   showSplash('⏳ جاري تحميل بيانات الحضور...');
-  window._attLoadedOnce = false;
   window._attPage = 0;
   await initAttMap(date);
   window._lastAbsent = await ATT.lastSessionAbsent(currentUser.classId, date);
-  window._attLoadedOnce = true;
   hideSplash();
   if(document.getElementById('page-content')){
     document.getElementById('page-content').innerHTML=pageTakeAtt();
@@ -1993,7 +1993,6 @@ async function saveAttendance(){
   }
 
   // بعد الحفظ الناجح، ابقِ البيانات المحلية كما هي (لا تعيد التحميل)
-  window._attLoadedOnce = true;
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
   notify('✅ تم حفظ الحضور بنجاح');
 }
