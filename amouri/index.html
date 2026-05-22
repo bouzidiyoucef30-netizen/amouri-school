@@ -608,7 +608,7 @@ const ATT = {
   },
 
   // حفظ حضور كل الطلبة دفعة واحدة (batch upsert)
-  async saveAll(records, classId, date){
+  async saveAll(records, classId, date, deletedIds=null){
     const k = this._key(classId, date);
     if(!this._cache[k]) this._cache[k] = {};
 
@@ -622,9 +622,9 @@ const ATT = {
     }
 
     try{
-      // UPSERT فقط — لا DELETE أبداً
-      // null = لم يُسجَّل في هذه الجلسة → نتجاهله ولا نمسحه من Supabase
-      // هذا يحمي بيانات الأساتذة الآخرين تماماً
+      // UPSERT للطلاب الذين لهم حالة (حاضر/غائب)
+      // null مع deletedIds = مسح عمدي → يُحذف من Supabase
+      // null بدون deletedIds = لم يُسجَّل → يُتجاهل (لا يمس بيانات الآخرين)
       const toUpsert = records
         .filter(r => r.present === true || r.present === false)
         .map(r => ({
@@ -634,10 +634,24 @@ const ATT = {
           present: r.present
         }));
 
+      const toDelete = records
+        .filter(r => (r.present === null || r.present === undefined) && deletedIds && deletedIds.has(r.studentId))
+        .map(r => r.studentId);
+
       if(toUpsert.length > 0){
         const { error } = await supabase.from('attendance')
           .upsert(toUpsert, { onConflict: 'student_id,class_id,date' });
         if(error) throw error;
+      }
+
+      if(toDelete.length > 0){
+        const { error } = await supabase.from('attendance')
+          .delete()
+          .eq('class_id', classId)
+          .eq('date', date)
+          .in('student_id', toDelete);
+        if(error) throw error;
+        toDelete.forEach(sid => { delete this._cache[k][sid]; });
       }
 
       // تحديث الكاش بما حُفظ فعلاً
@@ -1134,6 +1148,7 @@ function setPage(p){
     window._attMap = {};
     window._lastAbsent = new Set();
     window._attPage = 0;
+    window._attDeleted = new Set();
     document.getElementById('page-content').innerHTML = pages['take-att']();
     (async()=>{
       try{
@@ -1909,10 +1924,19 @@ async function changeAttDate(date){
 }
 function toggleStudent(id){
   const cur=window._attMap[id];
-  // cycle: undefined/null -> true(حاضر) -> false(غائب) -> null(فارغ)
-  if(cur===undefined||cur===null) window._attMap[id]=true;
-  else if(cur===true) window._attMap[id]=false;
-  else window._attMap[id]=null;
+  // cycle: undefined/null -> true(حاضر) -> false(غائب) -> null(مسح عمدي)
+  if(cur===undefined||cur===null){
+    window._attMap[id]=true;
+    // إزالة من قائمة المحذوفين إذا كان فيها
+    if(window._attDeleted) window._attDeleted.delete(id);
+  } else if(cur===true){
+    window._attMap[id]=false;
+  } else {
+    // null = مسح عمدي → نضيفه لقائمة المحذوفين
+    window._attMap[id]=null;
+    if(!window._attDeleted) window._attDeleted=new Set();
+    window._attDeleted.add(id);
+  }
   _updateStudentCard(id);
 }
 function _updateStudentCard(id){
@@ -1983,7 +2007,7 @@ async function saveAttendance(){
   const btn = document.querySelector('button[onclick="saveAttendance()"]');
   if(btn){ btn.disabled = true; btn.textContent = '⏳ جاري الحفظ...'; }
 
-  const result = await ATT.saveAll(records, currentUser.classId, date);
+  const result = await ATT.saveAll(records, currentUser.classId, date, window._attDeleted||new Set());
 
   if(btn){ btn.disabled = false; btn.textContent = '💾 حفظ الحضور'; }
 
@@ -1992,7 +2016,7 @@ async function saveAttendance(){
     return;
   }
 
-  // بعد الحفظ الناجح، ابقِ البيانات المحلية كما هي (لا تعيد التحميل)
+  window._attDeleted = new Set();
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
   notify('✅ تم حفظ الحضور بنجاح');
 }
