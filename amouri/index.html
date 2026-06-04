@@ -1229,9 +1229,16 @@ async function pageDashboard(){
     const sid=a.studentId;
     absentCounts[sid]=(absentCounts[sid]||0)+1;
   });
+  // غيابات الشهر الحالي فقط
+  const currentMonthStr=today.slice(0,7);
+  const monthAbsentCounts={};
+  attendance.filter(a=>!a.present&&a.date&&a.date.startsWith(currentMonthStr)).forEach(a=>{
+    monthAbsentCounts[a.studentId]=(monthAbsentCounts[a.studentId]||0)+1;
+  });
   const filteredStudents=currentUser.role==='teacher'?myStudents:students;
-  const atRisk=filteredStudents.filter(s=>(absentCounts[s.id]||0)>=5)
-    .sort((a,b)=>(absentCounts[b.id]||0)-(absentCounts[a.id]||0)).slice(0,5);
+  // المهددون: 4 غيابات شهرية أو أكثر
+  const atRisk=filteredStudents.filter(s=>(monthAbsentCounts[s.id]||0)>=4)
+    .sort((a,b)=>(monthAbsentCounts[b.id]||0)-(monthAbsentCounts[a.id]||0)).slice(0,8);
 
   // Recent attendance rows — show ALL today records
   // Support both old field names (studentId/classId) and new (sid/cid) for compatibility
@@ -1276,11 +1283,14 @@ async function pageDashboard(){
     ?'<div style="text-align:center;color:var(--green);padding:20px;font-weight:700">✅ لا توجد حالات خطر</div>'
     :atRisk.map(s=>{
       const cls=classes.find(c=>c.id===s.classId);
+      const mAbs=monthAbsentCounts[s.id]||0;
+      const pres=attendance.filter(a=>a.studentId===s.id&&a.present&&a.date&&a.date.startsWith(currentMonthStr)).length;
+      const rate=pres+mAbs>0?Math.round(pres/(pres+mAbs)*100):0;
       return `<div class="flex-between" style="padding:10px 0;border-bottom:1px solid var(--border)">
         <div class="flex-gap">${avatar(s.av,s.color)}
           <div><div style="font-weight:700;font-size:13.5px">${s.name}</div>
-          <div style="font-size:11px;color:var(--sub)">${cls?.name||''}</div></div>
-        </div>${badge((absentCounts[s.id]||0)+' غياب','red')}</div>`;
+          <div style="font-size:11px;color:var(--sub)">${cls?.name||''} &bull; حضور ${rate}%</div></div>
+        </div>${badge(mAbs+' غياب هذا الشهر','red')}</div>`;
     }).join('');
 
   // Show ALL today records — no slice limit
@@ -1430,6 +1440,17 @@ function pageSettings(){
         <input class="input" id="conf-pass" type="password" placeholder="••••••••">
       </div>
       <button class="btn" onclick="changeAdminPass()">💾 حفظ كلمة المرور</button>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">💾 النسخ الاحتياطي والاستيراد</div>
+    <p style="font-size:13px;color:var(--sub);margin-bottom:16px">احفظ نسخة احتياطية من جميع البيانات أو استعدها من ملف سابق</p>
+    <div class="flex-gap" style="flex-wrap:wrap">
+      <button class="btn" style="background:#8b5cf6" onclick="exportJSON()">💾 تصدير نسخة احتياطية JSON</button>
+      <button class="btn" style="background:#0d9488" onclick="importJSON()">📥 استيراد من ملف JSON</button>
+    </div>
+    <div style="margin-top:12px;padding:10px 14px;background:var(--yellow2);border-radius:8px;font-size:12px;color:#b45309">
+      ⚠️ عند الاستيراد سيتم إضافة البيانات المفقودة فقط دون حذف البيانات الموجودة
     </div>
   </div>`;
 }
@@ -2019,6 +2040,26 @@ async function saveAttendance(){
   window._attDeleted = new Set();
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
   notify('✅ تم حفظ الحضور بنجاح');
+
+  // عرض نافذة إشعار SMS
+  const presentCount = records.filter(r=>r.present===true).length;
+  const absentCount = records.filter(r=>r.present===false).length;
+  const classes = DB.get('classes')||[];
+  const cls = classes.find(c=>c.id===currentUser.classId);
+  const clsName = cls?.name || currentUser.classId || '';
+  const teacherName = currentUser.name || '';
+  const dateLabel = new Date(date).toLocaleDateString('ar-DZ',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  setTimeout(()=>{
+    if(confirm('هل تريد إرسال إشعار إلى الإدارة؟')){
+      const msg = `تم تسجيل حضور وغياب الفوج: ${clsName}
+المعلم: ${teacherName}
+التاريخ: ${dateLabel}
+عدد الحاضرين: ${presentCount}
+عدد الغائبين: ${absentCount}
+تم حفظ سجل الحضور والغياب بنجاح.`;
+      window.location.href = `sms:0656122145?body=${encodeURIComponent(msg)}`;
+    }
+  }, 300);
 }
 
 // ══════════════════════════════════════════════════
@@ -2069,10 +2110,12 @@ function pageCalendar(){
     const mEntries = Object.entries(monthCache);
     const p=mEntries.filter(([,v])=>v===true).length;
     const ab=mEntries.filter(([,v])=>v===false).length;
+    const rate=p+ab>0?Math.round(p/(p+ab)*100):0;
     statsHtml=`<div class="flex-wrap" style="margin-bottom:14px">
       ${badge('✅ حاضر: '+p+' يوم','green')}
       ${badge('❌ غائب: '+ab+' يوم','red')}
-      ${badge('📊 '+(p+ab>0?Math.round(p/(p+ab)*100):0)+'%','blue')}
+      ${badge('📊 '+rate+'%','blue')}
+      <button class="btn-sm" style="background:#8b5cf6;margin-right:4px" onclick="generateStudentPDF('${student}','${year}','${month}')">📄 تقرير PDF</button>
     </div>`;
   }
 
@@ -2086,9 +2129,14 @@ function pageCalendar(){
         <span style="font-weight:800;font-size:15px;min-width:130px;text-align:center">${arabicMonths[month]} ${year}</span>
         <button class="btn-ghost" onclick="calNav(1)">▶</button>
       </div>
-      <select class="select" onchange="calSetStudent(this.value)">
-        <option value="">اختر طالباً</option>${stOptions}
-      </select>
+      <div style="position:relative">
+        <input id="cal-search-input" class="input" placeholder="🔍 ابحث عن طالب..." value="${student?filteredStudents.find(s=>s.id===student)?.name||'':''}"
+          oninput="calSearchStudents(this.value)" onfocus="document.getElementById('cal-search-results').style.display='block'"
+          style="min-width:200px" autocomplete="off">
+        <div id="cal-search-results" style="position:absolute;top:100%;right:0;left:0;z-index:999;background:var(--card);border:1px solid var(--border);border-radius:10px;max-height:200px;overflow-y:auto;display:${student?'none':'none'};box-shadow:0 4px 20px var(--shadow)">
+          ${filteredStudents.sort((a,b)=>a.name.localeCompare(b.name,'ar')).map(s=>`<div onclick="calPickStudent('${s.id}','${s.name}')" style="padding:10px 14px;cursor:pointer;font-size:13.5px;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background=''">${s.name}</div>`).join('')}
+        </div>
+      </div>
     </div>
     ${statsHtml}
     <div class="cal-grid">${dayHeaders}</div>
@@ -2099,6 +2147,118 @@ function pageCalendar(){
     </div>
   </div>`;
 }
+
+// ══════════════════════════════════════════════════
+// تقرير PDF للطالب
+// ══════════════════════════════════════════════════
+function generateStudentPDF(studentId, year, month){
+  const students=DB.get('students')||[];
+  const classes=DB.get('classes')||[];
+  const s=students.find(st=>st.id===studentId);
+  if(!s){notify('⚠️ لم يتم العثور على الطالب','#f59e0b');return;}
+  const cls=classes.find(c=>c.id===s.classId);
+  const arabicMonths=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const monthStr=`${year}-${String(parseInt(month)+1).padStart(2,'0')}`;
+  const monthName=arabicMonths[parseInt(month)];
+  // حساب الحضور والغياب
+  const att=ATT.getAll();
+  const monthAtt=att.filter(a=>a.studentId===studentId&&a.date&&a.date.startsWith(monthStr));
+  const present=monthAtt.filter(a=>a.present).length;
+  const absent=monthAtt.filter(a=>!a.present).length;
+  const total=present+absent;
+  const rate=total>0?Math.round(present/total*100):0;
+  const mark=Math.round(rate/100*20*10)/10;
+  // أيام الغياب
+  const absentDays=monthAtt.filter(a=>!a.present).map(a=>{
+    const d=new Date(a.date);
+    return `${d.getDate()} ${monthName}`;
+  });
+  const logoData=DB.get('schoolLogo')||'';
+  const logoHtml=logoData?`<img src="${logoData}" style="width:80px;height:80px;object-fit:contain;border-radius:50%;border:3px solid #064e3b">`:'<div style="width:80px;height:80px;border-radius:50%;background:#064e3b;display:flex;align-items:center;justify-content:center;font-size:36px">🕌</div>';
+  const html=`<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Cairo,Arial,sans-serif;background:#fff;color:#1e293b;padding:30px;font-size:14px}
+  .header{text-align:center;padding:20px;border-bottom:3px solid #064e3b;margin-bottom:24px}
+  .school-name{font-size:22px;font-weight:900;color:#064e3b;margin-top:10px}
+  .report-title{font-size:16px;color:#64748b;margin-top:4px}
+  .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+  .info-card{background:#f0fdf4;border-radius:12px;padding:16px;border:1px solid #d1fae5}
+  .info-label{font-size:11px;color:#64748b;margin-bottom:4px}
+  .info-value{font-size:15px;font-weight:800;color:#064e3b}
+  .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+  .stat-box{text-align:center;padding:16px;border-radius:12px;border:2px solid}
+  .mark-box{background:#fef3c7;border:2px solid #f59e0b;border-radius:12px;padding:20px;text-align:center;margin-bottom:24px}
+  .absent-table{width:100%;border-collapse:collapse;margin-bottom:24px}
+  .absent-table th{background:#064e3b;color:#fff;padding:10px;text-align:center;font-size:13px}
+  .absent-table td{padding:8px;border-bottom:1px solid #e2e8f0;text-align:center;font-size:13px}
+  .absent-table tr:nth-child(even){background:#f8fafc}
+  .footer{border-top:2px solid #e2e8f0;padding-top:16px;text-align:center;color:#64748b;font-size:12px;margin-top:24px}
+  @media print{body{padding:15px}}
+</style>
+</head>
+<body>
+<div class="header">
+  ${logoHtml}
+  <div class="school-name">مدرسة عموري للقرآن الكريم</div>
+  <div class="report-title">تقرير الحضور والغياب — ${monthName} ${year}</div>
+</div>
+<div class="info-grid">
+  <div class="info-card">
+    <div class="info-label">اسم الطالب</div>
+    <div class="info-value">${s.name}</div>
+  </div>
+  <div class="info-card">
+    <div class="info-label">الفوج</div>
+    <div class="info-value">${cls?.name||'—'}</div>
+  </div>
+</div>
+<div class="stats-grid">
+  <div class="stat-box" style="background:#f0fdf4;border-color:#10b981">
+    <div style="font-size:24px;font-weight:900;color:#10b981">${present}</div>
+    <div style="font-size:11px;color:#64748b;margin-top:4px">أيام الحضور</div>
+  </div>
+  <div class="stat-box" style="background:#fef2f2;border-color:#ef4444">
+    <div style="font-size:24px;font-weight:900;color:#ef4444">${absent}</div>
+    <div style="font-size:11px;color:#64748b;margin-top:4px">أيام الغياب</div>
+  </div>
+  <div class="stat-box" style="background:#eff6ff;border-color:#3b82f6">
+    <div style="font-size:24px;font-weight:900;color:#3b82f6">${total}</div>
+    <div style="font-size:11px;color:#64748b;margin-top:4px">إجمالي الجلسات</div>
+  </div>
+  <div class="stat-box" style="background:#faf5ff;border-color:#8b5cf6">
+    <div style="font-size:24px;font-weight:900;color:#8b5cf6">${rate}%</div>
+    <div style="font-size:11px;color:#64748b;margin-top:4px">نسبة الحضور</div>
+  </div>
+</div>
+<div class="mark-box">
+  <div style="font-size:13px;color:#b45309;margin-bottom:6px;font-weight:700">علامة المواظبة من 20</div>
+  <div style="font-size:48px;font-weight:900;color:#f59e0b">${mark}/20</div>
+  <div style="font-size:12px;color:#64748b;margin-top:6px">
+    ${mark>=16?'🌟 ممتاز':mark>=12?'✅ جيد':mark>=8?'⚠️ مقبول':'❌ ضعيف'}
+  </div>
+</div>
+${absentDays.length>0?`
+<div style="font-size:14px;font-weight:800;color:#1e293b;margin-bottom:12px">📅 أيام الغياب</div>
+<table class="absent-table">
+  <thead><tr><th>#</th><th>اليوم</th><th>التاريخ</th></tr></thead>
+  <tbody>${absentDays.map((d,i)=>`<tr><td>${i+1}</td><td>${['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'][new Date(monthAtt.filter(a=>!a.present)[i]?.date).getDay()]||'—'}</td><td>${d}</td></tr>`).join('')}</tbody>
+</table>`:'<div style="text-align:center;color:#10b981;padding:20px;background:#f0fdf4;border-radius:12px;font-weight:700">✅ لا توجد غيابات هذا الشهر</div>'}
+<div class="footer">
+  <div>تاريخ إصدار التقرير: ${new Date().toLocaleDateString('ar-DZ',{year:'numeric',month:'long',day:'numeric'})}</div>
+  <div style="margin-top:4px">مدرسة عموري للقرآن الكريم — نظام إدارة الحضور والغياب</div>
+</div>
+</body></html>`;
+
+  const win=window.open('','_blank');
+  win.document.write(html);
+  win.document.close();
+  setTimeout(()=>win.print(),500);
+}
+
 function calNav(dir){
   let {year,month}=window._calState;
   month+=dir;
@@ -2107,6 +2267,26 @@ function calNav(dir){
   document.getElementById('page-content').innerHTML=pageCalendar();
 }
 function calSetStudent(id){window._calState.student=id;document.getElementById('page-content').innerHTML=pageCalendar();}
+function calPickStudent(id, name){
+  window._calState.student=id;
+  const inp=document.getElementById('cal-search-input');
+  if(inp) inp.value=name;
+  const res=document.getElementById('cal-search-results');
+  if(res) res.style.display='none';
+  document.getElementById('page-content').innerHTML=pageCalendar();
+}
+function calSearchStudents(q){
+  const res=document.getElementById('cal-search-results');
+  if(!res) return;
+  if(!q){res.style.display='none';return;}
+  const students=DB.get('students')||[];
+  const filtered=currentUser.role==='admin'?students:students.filter(s=>s.classId===currentUser.classId);
+  const norm=t=>t.replace(/[ً-ٟ]/g,'').replace(/[أإآا]/g,'ا').replace(/ة/g,'ه').replace(/ى/g,'ي');
+  const matches=filtered.filter(s=>norm(s.name).includes(norm(q))).sort((a,b)=>a.name.localeCompare(b.name,'ar'));
+  if(!matches.length){res.style.display='none';return;}
+  res.innerHTML=matches.map(s=>`<div onclick="calPickStudent('${s.id}','${s.name}')" style="padding:10px 14px;cursor:pointer;font-size:13.5px;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background=''">${s.name}</div>`).join('');
+  res.style.display='block';
+}
 async function calToggleDay(day){
   const {year,month,student}=window._calState;
   if(!student){notify('⚠️ يرجى اختيار طالب أولاً','#f59e0b');return;}
@@ -2151,16 +2331,24 @@ function pageStudents(){
   if(window._studentSearch) students=students.filter(s=>s.name.includes(window._studentSearch)||(s.phone||'').includes(window._studentSearch));
   const absentCounts={};
   att.filter(a=>!a.present).forEach(a=>absentCounts[a.studentId]=(absentCounts[a.studentId]||0)+1);
+  // حساب غيابات الشهر الحالي فقط
+  const currentMonthStr = todayStr().slice(0,7);
+  const monthAbsentCounts={};
+  att.filter(a=>!a.present&&a.date&&a.date.startsWith(currentMonthStr)).forEach(a=>monthAbsentCounts[a.studentId]=(monthAbsentCounts[a.studentId]||0)+1);
   const rows=students.map(s=>{
     const cls=classes.find(c=>c.id===s.classId);
     const abs=absentCounts[s.id]||0;
+    const monthAbs=monthAbsentCounts[s.id]||0;
     return `<tr>
       <td><div class="flex-gap">${avatar(s.av,s.color)} <span style="font-weight:700">${s.name}</span></div></td>
       <td><span style="font-size:12px;color:var(--sub)">${cls?.name||'-'}</span></td>
       <td>${s.phone||'-'}</td>
-      <td>${badge(abs+' يوم',abs>=5?'red':'green')}</td>
-      <td>${badge(abs>=5?'⚠️ في خطر':'✅ ملتزم',abs>=5?'yellow':'green')}</td>
-      <td><button class="btn-sm" style="background:#ef4444" onclick="deleteStudent('${s.id}')">🗑️</button></td>
+      <td>${badge(monthAbs+' يوم هذا الشهر',monthAbs>=4?'red':'green')}</td>
+      <td>${badge(monthAbs>=4?'⚠️ في خطر':'✅ ملتزم',monthAbs>=4?'yellow':'green')}</td>
+      <td><div class="flex-gap">
+        <button class="btn-sm" style="background:#3b82f6" onclick="showEditStudentModal('${s.id}')">✏️</button>
+        <button class="btn-sm" style="background:#ef4444" onclick="deleteStudent('${s.id}')">🗑️</button>
+      </div></td>
     </tr>`;
   }).join('');
   const classOptions=classes.map(c=>`<option value="${c.id}"${c.id===window._studentFilter?' selected':''}>${c.name}</option>`).join('');
@@ -2181,12 +2369,77 @@ function pageStudents(){
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead><tr><th>الطالب</th><th>الفوج</th><th>هاتف الولي</th><th>الغيابات</th><th>الحالة</th><th>حذف</th></tr></thead>
+        <thead><tr><th>الطالب</th><th>الفوج</th><th>هاتف الولي</th><th>غيابات الشهر</th><th>الحالة</th><th>إجراءات</th></tr></thead>
         <tbody>${rows||'<tr><td colspan="6" style="text-align:center;color:var(--sub);padding:30px">لا توجد نتائج</td></tr>'}</tbody>
       </table>
     </div>
   </div>`;
 }
+
+// ══════════════════════════════════════════════════
+// تعديل بيانات الطالب
+// ══════════════════════════════════════════════════
+function showEditStudentModal(id){
+  const students=DB.get('students')||[];
+  const classes=DB.get('classes')||[];
+  const s=students.find(st=>st.id===id);
+  if(!s) return;
+  const colors=['#10b981','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#0d9488','#db2777','#0284c7','#b45309'];
+  const colorBtns=colors.map(c=>`<div onclick="selectStudentColor('${c}')" id="sclr-${c.replace('#','')}" style="width:28px;height:28px;border-radius:50%;background:${c};cursor:pointer;border:${c===s.color?'3px solid var(--text)':'2px solid transparent'}"></div>`).join('');
+  const classOpts=classes.map(c=>`<option value="${c.id}"${c.id===s.classId?' selected':''}>${c.name}</option>`).join('');
+  document.body.insertAdjacentHTML('beforeend',`
+  <div id="edit-student-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto">
+    <div class="card" style="width:100%;max-width:420px;position:relative;margin:auto">
+      <button onclick="document.getElementById('edit-student-modal').remove()" style="position:absolute;top:12px;left:12px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--sub)">✕</button>
+      <div class="card-title" style="margin-bottom:20px">✏️ تعديل بيانات الطالب</div>
+      <input type="hidden" id="edit-student-id" value="${s.id}">
+
+      <label class="label">الاسم الكامل</label>
+      <input id="edit-st-name" class="input" value="${s.name}" placeholder="اسم الطالب">
+
+      <label class="label" style="margin-top:12px">الفوج</label>
+      <select id="edit-st-class" class="input">${classOpts}</select>
+
+      <label class="label" style="margin-top:12px">رقم هاتف الولي</label>
+      <input id="edit-st-phone" class="input" value="${s.phone||''}" placeholder="0600000000" type="tel">
+
+      <label class="label" style="margin-top:12px">الرمز (حرفان)</label>
+      <input id="edit-st-av" class="input" value="${s.av||''}" placeholder="مثال: أح" maxlength="3" style="width:80px">
+
+      <label class="label" style="margin-top:12px">اللون</label>
+      <div class="flex-gap" style="flex-wrap:wrap;gap:8px;margin-bottom:4px">${colorBtns}</div>
+      <input type="hidden" id="edit-st-color" value="${s.color||'#10b981'}">
+
+      <button class="btn" style="width:100%;margin-top:20px" onclick="doEditStudent()">💾 حفظ التعديلات</button>
+    </div>
+  </div>`);
+}
+
+function selectStudentColor(c){
+  document.querySelectorAll('[id^="sclr-"]').forEach(el=>el.style.border='2px solid transparent');
+  const el=document.getElementById('sclr-'+c.replace('#',''));
+  if(el) el.style.border='3px solid var(--text)';
+  const inp=document.getElementById('edit-st-color');
+  if(inp) inp.value=c;
+}
+
+function doEditStudent(){
+  const id=document.getElementById('edit-student-id')?.value;
+  const name=document.getElementById('edit-st-name')?.value.trim();
+  const classId=document.getElementById('edit-st-class')?.value;
+  const phone=document.getElementById('edit-st-phone')?.value.trim();
+  const av=document.getElementById('edit-st-av')?.value.trim()||name.slice(0,2);
+  const color=document.getElementById('edit-st-color')?.value||'#10b981';
+  if(!name){notify('⚠️ يرجى إدخال اسم الطالب','#f59e0b');return;}
+  const students=DB.get('students')||[];
+  const updated=students.map(s=>s.id===id?{...s,name,classId,phone,av,color}:s);
+  DB.set('students',updated);
+  addAuditLog('تعديل طالب',`تم تعديل بيانات الطالب: ${name}`);
+  notify('✅ تم تحديث بيانات الطالب');
+  document.getElementById('edit-student-modal')?.remove();
+  document.getElementById('page-content').innerHTML=pageStudents();
+}
+
 async function deleteStudent(id){
   if(!confirm('هل أنت متأكد من حذف هذا الطالب؟')) return;
   const students = DB.get('students')||[];
@@ -2254,7 +2507,10 @@ function pageStats(){
   const filtAtt=currentUser.role==='teacher'?att.filter(a=>a.classId===currentUser.classId):att;
   const absentCounts={};
   filtAtt.filter(a=>!a.present).forEach(a=>absentCounts[a.studentId]=(absentCounts[a.studentId]||0)+1);
-  const topAbsent=students.map(s=>({...s,abs:absentCounts[s.id]||0})).sort((a,b)=>b.abs-a.abs).slice(0,8);
+  const cmStr=todayStr().slice(0,7);
+  const mAbsCounts={};
+  filtAtt.filter(a=>!a.present&&a.date&&a.date.startsWith(cmStr)).forEach(a=>mAbsCounts[a.studentId]=(mAbsCounts[a.studentId]||0)+1);
+  const topAbsent=students.map(s=>({...s,abs:absentCounts[s.id]||0,mAbs:mAbsCounts[s.id]||0})).sort((a,b)=>b.mAbs-a.mAbs).slice(0,8);
   const totalPres=filtAtt.filter(a=>a.present).length;
   const totalAbs=filtAtt.filter(a=>!a.present).length;
   const pct=filtAtt.length?Math.round(totalPres/filtAtt.length*100):0;
@@ -2290,9 +2546,7 @@ function pageStats(){
   return `
   <div class="topbar">
     <div class="page-title">📊 الإحصائيات</div>
-    <button class="btn" onclick="exportCSV()">📊 تصدير CSV</button>
-    <button class="btn" style="background:#8b5cf6" onclick="exportJSON()">💾 نسخة احتياطية JSON</button>
-    <button class="btn" style="background:#0d9488" onclick="importJSON()">📥 استيراد JSON</button>
+
   </div>
   <div class="stats-row">
     ${[
@@ -2314,34 +2568,7 @@ function pageStats(){
     </div>
   </div>`;
 }
-function exportCSV(){
-  const students=DB.get('students')||[];
-  const classes=DB.get('classes')||[];
-  const att=ATT.getAll();
-  // حساب الحضور والغياب لكل طالب
-  const presentCounts={}, absentCounts={};
-  att.forEach(a=>{
-    if(a.present===true) presentCounts[a.studentId]=(presentCounts[a.studentId]||0)+1;
-    else if(a.present===false) absentCounts[a.studentId]=(absentCounts[a.studentId]||0)+1;
-  });
-  const rows=[['الاسم','الفوج','إجمالي الحضور','إجمالي الغياب','نسبة الحضور','الحالة']];
-  students.forEach(s=>{
-    const cls=classes.find(c=>c.id===s.classId);
-    const pres=presentCounts[s.id]||0;
-    const abs=absentCounts[s.id]||0;
-    const total=pres+abs;
-    const rate=total>0?Math.round(pres/total*100)+'%':'—';
-    const status=abs>=5?'في خطر':abs>=3?'تحت المراقبة':'ملتزم';
-    rows.push([`"${s.name}"`,`"${cls?.name||''}"`,pres,abs,rate,status]);
-  });
-  const csv=rows.map(r=>r.join(',')).join('\n');
-  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download=`تقرير_الحضور_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  notify('✅ تم تصدير تقرير CSV');
-}
+
 
 function exportJSON(){
   const data={
@@ -2499,9 +2726,10 @@ Object.assign(window, {
   showEditClassModal, doEditClass, selectEditColor,
   showCredsModal, selectColor,
   pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, saveAttendance, loadMoreStudents,
-  pageCalendar, calNav, calSetStudent, calToggleDay,
+  pageCalendar, calNav, calSetStudent, calToggleDay, calSearchStudents, calPickStudent,
   pageStudents, deleteStudent, showAddStudentModal, doAddStudent,
-  pageStats, exportCSV, exportJSON, importJSON,
+  showEditStudentModal, doEditStudent, selectStudentColor,
+  pageStats, exportJSON, importJSON, generateStudentPDF,
   pageAudit,
   copyText, notify,
   loadSavedCredentials, loadLogo,
