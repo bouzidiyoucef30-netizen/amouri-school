@@ -775,6 +775,35 @@ const ATT = {
       });
     });
     return result;
+  },
+
+  // تحميل كل سجلات الحضور من Supabase (للإحصائيات الدقيقة)
+  async loadAllFromDB(classId){
+    if(!SB_CONFIGURED) return this.getAll();
+    try{
+      let query = supabase.from('attendance').select('student_id, class_id, date, present');
+      if(classId) query = query.eq('class_id', classId);
+      const allData = [];
+      let from = 0;
+      const PAGE = 1000;
+      while(true){
+        const { data, error } = await query.range(from, from+PAGE-1);
+        if(error) throw error;
+        (data||[]).forEach(r => {
+          allData.push({ studentId: r.student_id, classId: r.class_id, date: r.date, present: r.present });
+          // تحديث الكاش
+          const k = ATT._key(r.class_id, r.date);
+          if(!ATT._cache[k]) ATT._cache[k] = {};
+          ATT._cache[k][r.student_id] = r.present;
+        });
+        if(!data || data.length < PAGE) break;
+        from += PAGE;
+      }
+      return allData;
+    }catch(e){
+      console.warn('ATT.loadAllFromDB error:', e);
+      return this.getAll();
+    }
   }
 };
 
@@ -1039,7 +1068,7 @@ function doLogin(){
     if(!user){
       document.getElementById('login-err').textContent='⚠️ بيانات الدخول غير صحيحة';
       document.getElementById('login-err').style.display='block';
-      btn.textContent='🔐 تسجيل الدخول'; btn.disabled=false; return;
+      btn.innerHTML='🔐 تسجيل الدخول'; btn.disabled=false; return;
     }
     document.getElementById('login-err').style.display='none';
     if(remember){
@@ -1053,7 +1082,7 @@ function doLogin(){
     document.getElementById('app').style.display='flex';
     loadLogo();
     buildSidebar(); setPage('dashboard');
-    btn.textContent='🔐 تسجيل الدخول'; btn.disabled=false;
+    btn.innerHTML='🔐 تسجيل الدخول'; btn.disabled=false;
   },600);
 }
 function doLogout(){
@@ -1215,8 +1244,10 @@ async function pageDashboard(){
   let todayFromDB = [];
   try{ todayFromDB = await ATT.loadDay(today); }catch(e){ todayFromDB = ATT.getAll().filter(a=>a.date===today); }
 
-  // دمج مع الكاش للبيانات القديمة (الإحصائيات الكاملة)
-  const attendance=ATT.getAll();
+  // تحميل كل الحضور من Supabase للإحصائيات الدقيقة
+  const classId = currentUser.role==='teacher' ? currentUser.classId : null;
+  let attendance;
+  try{ attendance = await ATT.loadAllFromDB(classId); }catch(e){ attendance = ATT.getAll(); }
 
   // Filter by teacher's class if teacher
   const myStudents=currentUser.role==='teacher'?students.filter(s=>s.classId===currentUser.classId):students;
@@ -1875,7 +1906,7 @@ function pageTakeAtt(){
     const empty=st===null||st===undefined;
     const bc=empty?'var(--border)':present?'#10b981':'#ef4444';
     const bg=empty?'transparent':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
-    const icon=empty?'⬜':present?'✅':'❌';
+    const attIcon=empty?'⬜':present?'✅':'❌';
     const wasAbsent=lastAbsent.has(s.id);
     return `<div class="student-att-card" id="scard-${s.id}" style="border-color:${bc};background:${bg}">
       ${avatar(s.av,s.color,38)}
@@ -1883,7 +1914,7 @@ function pageTakeAtt(){
         <div style="font-weight:700;font-size:14px">${s.name}${wasAbsent?` <span style="background:#fef3c7;color:#b45309;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:700;margin-right:4px">غاب الحصة الماضية</span>`:''}</div>
         <div style="font-size:11.5px;color:var(--sub)">📱 ${s.phone||'—'}</div>
       </div>
-      <span id="att-icon-${s.id}" style="font-size:18px;margin-left:6px">${icon}</span>
+      <span id="att-icon-${s.id}" style="font-size:18px;margin-left:6px">${attIcon}</span>
       <button class="toggle" id="tog-${s.id}" style="background:${present?'var(--green)':absent?'#ef4444':'#d1d5db'}" onclick="toggleStudent('${s.id}')">
         <div class="toggle-dot" id="togdot-${s.id}" style="right:${present?'3px':'calc(100% - 23px)'}"></div>
       </button>
@@ -1967,7 +1998,7 @@ function _updateStudentCard(id){
   const empty=st===null||st===undefined;
   const bc=empty?'var(--border)':present?'#10b981':'#ef4444';
   const bg=empty?'transparent':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
-  const icon=empty?'⬜':present?'✅':'❌';
+  const attIcon=empty?'⬜':present?'✅':'❌';
   const card=document.getElementById('scard-'+id);
   const tog=document.getElementById('tog-'+id);
   const dot=document.getElementById('togdot-'+id);
@@ -1975,7 +2006,7 @@ function _updateStudentCard(id){
   if(card){card.style.borderColor=bc;card.style.background=bg;}
   if(tog) tog.style.background=present?'var(--green)':absent?'#ef4444':'#d1d5db';
   if(dot) dot.style.right=present?'3px':'calc(100% - 23px)';
-  if(ico) ico.textContent=icon;
+  if(ico) ico.textContent=attIcon;
 }
 function markAll(val){
   const students=(DB.get('students')||[]).filter(s=>s.classId===currentUser.classId);
@@ -1999,12 +2030,12 @@ function loadMoreStudents(){
     const present=st===true, absent=st===false, empty=st===null||st===undefined;
     const bc=empty?'var(--border)':present?'#10b981':'#ef4444';
     const bg=empty?'transparent':present?'rgba(16,185,129,0.05)':'rgba(239,68,68,0.05)';
-    const icon=empty?'⬜':present?'✅':'❌';
+    const attIcon=empty?'⬜':present?'✅':'❌';
     const wasAbsent=lastAbsent.has(s.id);
     const div=document.createElement('div');
     div.className='student-att-card'; div.id='scard-'+s.id;
     div.style.cssText=`border-color:${bc};background:${bg}`;
-    div.innerHTML=`${avatar(s.av,s.color,38)}<div style="flex:1"><div style="font-weight:700;font-size:14px">${s.name}${wasAbsent?` <span style="background:#fef3c7;color:#b45309;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:700;margin-right:4px">غاب الحصة الماضية</span>`:''}</div><div style="font-size:11.5px;color:var(--sub)">📱 ${s.phone||'—'}</div></div><span id="att-icon-${s.id}" style="font-size:18px;margin-left:6px">${icon}</span><button class="toggle" id="tog-${s.id}" style="background:${present?'var(--green)':absent?'#ef4444':'#d1d5db'}" onclick="toggleStudent('${s.id}')"><div class="toggle-dot" id="togdot-${s.id}" style="right:${present?'3px':'calc(100% - 23px)'}"></div></button>`;
+    div.innerHTML=`${avatar(s.av,s.color,38)}<div style="flex:1"><div style="font-weight:700;font-size:14px">${s.name}${wasAbsent?` <span style="background:#fef3c7;color:#b45309;font-size:10px;padding:2px 6px;border-radius:8px;font-weight:700;margin-right:4px">غاب الحصة الماضية</span>`:''}</div><div style="font-size:11.5px;color:var(--sub)">📱 ${s.phone||'—'}</div></div><span id="att-icon-${s.id}" style="font-size:18px;margin-left:6px">${attIcon}</span><button class="toggle" id="tog-${s.id}" style="background:${present?'var(--green)':absent?'#ef4444':'#d1d5db'}" onclick="toggleStudent('${s.id}')"><div class="toggle-dot" id="togdot-${s.id}" style="right:${present?'3px':'calc(100% - 23px)'}"></div></button>`;
     container.appendChild(div);
   });
   if(hasMore){
@@ -2030,7 +2061,7 @@ async function saveAttendance(){
 
   const result = await ATT.saveAll(records, currentUser.classId, date, window._attDeleted||new Set());
 
-  if(btn){ btn.disabled = false; btn.textContent = '💾 حفظ الحضور'; }
+  if(btn){ btn.disabled=false; btn.textContent='💾 حفظ الحضور'; }
 
   if(!result.ok){
     notify('❌ فشل الحفظ، يرجى المحاولة مرة أخرى', '#ef4444');
@@ -2057,7 +2088,8 @@ async function saveAttendance(){
 عدد الحاضرين: ${presentCount}
 عدد الغائبين: ${absentCount}
 تم حفظ سجل الحضور والغياب بنجاح.`;
-      window.location.href = `sms:0656122145?body=${encodeURIComponent(msg)}`;
+      const smsLink = `sms:0656122145${/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)?'?':'&'}body=${encodeURIComponent(msg)}`;
+      window.open(smsLink, '_blank') || (window.location.href = smsLink);
     }
   }, 300);
 }
@@ -2075,9 +2107,10 @@ function pageCalendar(){
   const daysInMonth=new Date(year,month+1,0).getDate();
   const firstDay=new Date(year,month,1).getDay();
   const today=todayStr();
-  // بيانات الشهر من الكاش (محملة مسبقاً)
+  // بيانات الشهر من Supabase عبر loadMonth
   const monthStr=`${year}-${String(month+1).padStart(2,'0')}`;
   const monthCache = {};
+  // قراءة من الكاش أولاً
   Object.entries(ATT._cache).forEach(([k, map]) => {
     const [cid, date] = k.split('|');
     if(date && date.startsWith(monthStr) && map[student] !== undefined){
@@ -2264,15 +2297,45 @@ function calNav(dir){
   month+=dir;
   if(month<0){month=11;year--;}if(month>11){month=0;year++;}
   window._calState={...window._calState,year,month};
-  document.getElementById('page-content').innerHTML=pageCalendar();
+  if(window._calState.student){
+    _loadCalStudent(window._calState.student);
+  } else {
+    document.getElementById('page-content').innerHTML=pageCalendar();
+  }
 }
-function calSetStudent(id){window._calState.student=id;document.getElementById('page-content').innerHTML=pageCalendar();}
+function calSetStudent(id){
+  window._calState.student=id;
+  _loadCalStudent(id);
+}
 function calPickStudent(id, name){
   window._calState.student=id;
   const inp=document.getElementById('cal-search-input');
   if(inp) inp.value=name;
   const res=document.getElementById('cal-search-results');
   if(res) res.style.display='none';
+  _loadCalStudent(id);
+}
+async function _loadCalStudent(studentId){
+  const {year, month} = window._calState;
+  const monthStr=`${year}-${String(month+1).padStart(2,'0')}`;
+  // تحميل بيانات الشهر من Supabase
+  if(SB_CONFIGURED && studentId){
+    try{
+      const students=DB.get('students')||[];
+      const s=students.find(st=>st.id===studentId);
+      if(s){
+        const {data} = await supabase.from('attendance')
+          .select('student_id, class_id, date, present')
+          .eq('student_id', studentId)
+          .like('date', `${monthStr}%`);
+        (data||[]).forEach(r=>{
+          const k=ATT._key(r.class_id, r.date);
+          if(!ATT._cache[k]) ATT._cache[k]={};
+          ATT._cache[k][r.student_id]=r.present;
+        });
+      }
+    }catch(e){ console.warn('Cal load error:', e); }
+  }
   document.getElementById('page-content').innerHTML=pageCalendar();
 }
 function calSearchStudents(q){
@@ -2499,10 +2562,12 @@ function doAddStudent(color){
 // ══════════════════════════════════════════════════
 // PAGE: STATS
 // ══════════════════════════════════════════════════
-function pageStats(){
+async function pageStats(){
   const classes=DB.get('classes')||[];
   const allStudents=DB.get('students')||[];
-  const att=ATT.getAll();
+  // تحميل من Supabase للدقة
+  const classId = currentUser.role==='teacher' ? currentUser.classId : null;
+  const att = await ATT.loadAllFromDB(classId);
   const students=currentUser.role==='teacher'?allStudents.filter(s=>s.classId===currentUser.classId):allStudents;
   const filtAtt=currentUser.role==='teacher'?att.filter(a=>a.classId===currentUser.classId):att;
   const absentCounts={};
@@ -2726,7 +2791,7 @@ Object.assign(window, {
   showEditClassModal, doEditClass, selectEditColor,
   showCredsModal, selectColor,
   pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, saveAttendance, loadMoreStudents,
-  pageCalendar, calNav, calSetStudent, calToggleDay, calSearchStudents, calPickStudent,
+  pageCalendar, calNav, calSetStudent, calToggleDay, calSearchStudents, calPickStudent, _loadCalStudent,
   pageStudents, deleteStudent, showAddStudentModal, doAddStudent,
   showEditStudentModal, doEditStudent, selectStudentColor,
   pageStats, exportJSON, importJSON, generateStudentPDF,
