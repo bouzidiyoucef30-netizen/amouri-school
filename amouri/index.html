@@ -2575,11 +2575,12 @@ async function pageStats(){
   const cmStr=todayStr().slice(0,7);
   const mAbsCounts={};
   filtAtt.filter(a=>!a.present&&a.date&&a.date.startsWith(cmStr)).forEach(a=>mAbsCounts[a.studentId]=(mAbsCounts[a.studentId]||0)+1);
-  const topAbsent=students.map(s=>({...s,abs:absentCounts[s.id]||0,mAbs:mAbsCounts[s.id]||0})).sort((a,b)=>b.mAbs-a.mAbs).slice(0,8);
+  const topAbsent=students.map(s=>({...s,abs:absentCounts[s.id]||0,mAbs:mAbsCounts[s.id]||0}))
+    .sort((a,b)=>b.mAbs-a.mAbs || b.abs-a.abs).slice(0,8);
   const totalPres=filtAtt.filter(a=>a.present).length;
   const totalAbs=filtAtt.filter(a=>!a.present).length;
   const pct=filtAtt.length?Math.round(totalPres/filtAtt.length*100):0;
-  const maxAbs=topAbsent[0]?.abs||1;
+  const maxAbs=Math.max(...topAbsent.map(s=>s.mAbs), 1);
   const classStatRows=classes.map(cls=>{
     const clsStudents=allStudents.filter(s=>s.classId===cls.id);
     const clsAtt=att.filter(a=>a.classId===cls.id);
@@ -2603,9 +2604,9 @@ async function pageStats(){
           ${avatar(s.av,s.color,32)}
           <div><div style="font-weight:700;font-size:13px">${s.name}</div>
             <div style="font-size:11px;color:var(--sub)">${cls?.name||''}</div></div>
-        </div>${badge(s.abs+' غياب',s.abs>=5?'red':'yellow')}
+        </div>${badge(s.mAbs+' غياب هذا الشهر',s.mAbs>=5?'red':'yellow')}
       </div>
-      <div class="risk-bar"><div class="risk-fill" style="width:${Math.round(s.abs/maxAbs*100)}%;background:${s.abs>=5?'#ef4444':'#f59e0b'}"></div></div>
+      <div class="risk-bar"><div class="risk-fill" style="width:${Math.round(s.mAbs/maxAbs*100)}%;background:${s.mAbs>=5?'#ef4444':'#f59e0b'}"></div></div>
     </div>`;
   }).join('');
   return `
