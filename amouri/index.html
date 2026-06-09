@@ -2088,8 +2088,21 @@ async function saveAttendance(){
 عدد الحاضرين: ${presentCount}
 عدد الغائبين: ${absentCount}
 تم حفظ سجل الحضور والغياب بنجاح.`;
-      const smsLink = `sms:0656122145${/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)?'?':'&'}body=${encodeURIComponent(msg)}`;
-      window.open(smsLink, '_blank') || (window.location.href = smsLink);
+      const encodedMsg = encodeURIComponent(msg);
+      const phone = '0656122145';
+      // Android يستخدم ? بينما iOS يستخدم &
+      const isAndroid = /Android/i.test(navigator.userAgent);
+      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+      let smsLink;
+      if(isAndroid){
+        smsLink = `sms:${phone}?body=${encodedMsg}`;
+      } else if(isIOS){
+        smsLink = `sms:${phone}&body=${encodedMsg}`;
+      } else {
+        // حاسوب — فتح واتساب ويب
+        smsLink = `https://wa.me/213${phone.replace(/^0/,'')}?text=${encodedMsg}`;
+      }
+      window.location.href = smsLink;
     }
   }, 300);
 }
