@@ -485,15 +485,24 @@ async function loadAllFromSupabase(){
   }catch{}
 }
 
-function saveToSupabase(k, v){
+// تتبع العمليات الجارية لمنع Realtime من التغلب عليها
+const _pendingSaves = new Set();
+
+async function saveToSupabase(k, v){
   // Always save locally as backup
   try{ localStorage.setItem('amouri_'+k, JSON.stringify(v)); }catch{}
   // Save to Supabase if configured (upsert by key)
   if(!SB_CONFIGURED) return;
-  supabase
-    .from('amouri_store')
-    .upsert({ key: k, value: v }, { onConflict: 'key' })
-    .then(({ error }) => { if(error) console.warn('Supabase save error:', error); });
+  _pendingSaves.add(k);
+  try{
+    const { error } = await supabase
+      .from('amouri_store')
+      .upsert({ key: k, value: v }, { onConflict: 'key' });
+    if(error) console.warn('Supabase save error:', error);
+  }catch(e){ console.warn('Supabase save error:', e); }
+  finally{
+    setTimeout(()=>_pendingSaves.delete(k), 2000);
+  }
 }
 
 // ══════════════════════════════════════════════════
@@ -501,7 +510,7 @@ function saveToSupabase(k, v){
 // ══════════════════════════════════════════════════
 const DB={
   get(k){ return STORE[k]??null; },
-  set(k,v){ STORE[k]=v; saveToSupabase(k,v); },
+  set(k,v){ STORE[k]=v; saveToSupabase(k,v); }, // async but intentional
   del(k){ STORE[k]=null; saveToSupabase(k,null); },
   init(){
     if(this.get('init2')) return;
@@ -846,9 +855,10 @@ function startRealtime(){
         if(payload.new && payload.new.key){
           const k = payload.new.key;
           // لا نحدث attendance من amouri_store (لها جدول مستقل)
-          if(k !== 'attendance'){
-            STORE[k] = payload.new.value;
-          }
+          if(k === 'attendance') return;
+          // لا نستبدل البيانات إذا كنا نحفظ نفس المفتاح حالياً
+          if(_pendingSaves && _pendingSaves.has(k)) return;
+          STORE[k] = payload.new.value;
         }
         if(typeof currentUser !== "undefined" && currentUser && typeof setPage !== "undefined" && currentPage &&
            document.getElementById('app') && document.getElementById('app').style.display !== 'none'){
@@ -2089,20 +2099,9 @@ async function saveAttendance(){
 عدد الغائبين: ${absentCount}
 تم حفظ سجل الحضور والغياب بنجاح.`;
       const encodedMsg = encodeURIComponent(msg);
-      const phone = '0656122145';
-      // Android يستخدم ? بينما iOS يستخدم &
-      const isAndroid = /Android/i.test(navigator.userAgent);
-      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-      let smsLink;
-      if(isAndroid){
-        smsLink = `sms:${phone}?body=${encodedMsg}`;
-      } else if(isIOS){
-        smsLink = `sms:${phone}&body=${encodedMsg}`;
-      } else {
-        // حاسوب — فتح واتساب ويب
-        smsLink = `https://wa.me/213${phone.replace(/^0/,'')}?text=${encodedMsg}`;
-      }
-      window.location.href = smsLink;
+      // WhatsApp يعمل على جميع الهواتف وجميع الشرائح
+      const waLink = `https://wa.me/213667556648?text=${encodedMsg}`;
+      window.open(waLink, '_blank');
     }
   }, 300);
 }
