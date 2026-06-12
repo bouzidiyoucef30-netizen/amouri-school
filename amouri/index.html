@@ -1341,6 +1341,69 @@ async function pageDashboard(){
     <td>${badge(r.present?'✅ حاضر':'❌ غائب',r.present?'green':'red')}</td></tr>`
   ).join('');
 
+  // ── متابعة تسجيل الحضور اليوم (Admin only) ──
+  let monitorHtml='';
+  if(currentUser.role==='admin'){
+    const users=DB.get('users')||[];
+    const showOnlyMissing = !!window._monitorOnlyMissing;
+
+    const monitorRows = classes.map(cls=>{
+      const teacher=users.find(u=>u.id===cls.teacherId);
+      const clsRecords = todayAtt.filter(a=>a.classId===cls.id);
+      const registered = clsRecords.length>0;
+      let lastTime='—';
+      if(registered){
+        const times = clsRecords.map(a=>a.savedAt).filter(Boolean);
+        if(times.length){
+          const latest = times.reduce((a,b)=> (new Date(a)>new Date(b)?a:b));
+          const d=new Date(latest);
+          if(!isNaN(d.getTime())) lastTime = d.toLocaleTimeString('ar-DZ',{hour:'2-digit',minute:'2-digit'});
+        }
+      }
+      return {cls, teacher, registered, lastTime};
+    });
+
+    const totalClasses = classes.length;
+    const registeredCount = monitorRows.filter(r=>r.registered).length;
+    const notRegisteredCount = totalClasses - registeredCount;
+
+    const visibleRows = showOnlyMissing ? monitorRows.filter(r=>!r.registered) : monitorRows;
+
+    const monitorTableRows = visibleRows.map(r=>`
+      <tr style="${!r.registered?'background:var(--red2)':''}">
+        <td><div class="flex-gap">${avatar(r.cls.av||'ف',r.cls.color)} ${r.cls.name}</div></td>
+        <td>${r.teacher?.name||'—'}</td>
+        <td>${r.registered?badge('✅ تم التسجيل','green'):badge('❌ لم يسجل','red')}</td>
+        <td>${r.lastTime}</td>
+        <td><button class="btn-sm" style="background:#3b82f6" onclick="showClassAttendanceDetail('${r.cls.id}')">عرض</button></td>
+      </tr>`).join('');
+
+    monitorHtml=`
+    <div class="card" style="grid-column:1/-1;margin-top:18px">
+      <div class="flex-between" style="margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div class="card-title" style="margin-bottom:0">📋 متابعة تسجيل الحضور اليوم</div>
+        <button class="btn-sm" style="background:${showOnlyMissing?'#ef4444':'var(--green)'};padding:8px 14px" onclick="toggleMonitorFilter()">${showOnlyMissing?'عرض الكل':'عرض الأفواج التي لم تسجل فقط'}</button>
+      </div>
+      <div class="stats-row" style="margin-bottom:14px">
+        ${[
+          {icon:'🏫',label:'إجمالي الأفواج',val:totalClasses,color:'#8b5cf6',border:'#ede9fe'},
+          {icon:'✅',label:'سجّلت الحضور اليوم',val:registeredCount,color:'#10b981',border:'#d1fae5'},
+          {icon:'❌',label:'لم تسجل الحضور اليوم',val:notRegisteredCount,color:'#ef4444',border:'#fee2e2'},
+        ].map(s=>`<div class="stat-card" style="border-color:${s.border}33">
+          <div class="stat-icon">${s.icon}</div>
+          <div class="stat-num" style="color:${s.color}">${s.val}</div>
+          <div class="stat-label">${s.label}</div>
+        </div>`).join('')}
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>الفوج</th><th>الأستاذ المسؤول</th><th>حالة التسجيل</th><th>وقت آخر تسجيل</th><th></th></tr></thead>
+          <tbody>${monitorTableRows||'<tr><td colspan="5" style="text-align:center;color:var(--sub);padding:20px">لا توجد أفواج</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
   return `
   <div class="topbar">
     <div>
@@ -1367,11 +1430,78 @@ async function pageDashboard(){
         </table>
       </div>
     </div>
-  </div>`;
+  </div>
+  ${monitorHtml}`;
 }
 
 // ══════════════════════════════════════════════════
-// DASHBOARD: Today Detail Modal (present/absent)
+// DASHBOARD: Attendance Monitor — filter toggle & class detail modal
+// ══════════════════════════════════════════════════
+function toggleMonitorFilter(){
+  window._monitorOnlyMissing = !window._monitorOnlyMissing;
+  document.getElementById('page-content').innerHTML='';
+  setPage('dashboard');
+}
+
+async function showClassAttendanceDetail(classId){
+  const students=DB.get('students')||[];
+  const classes=DB.get('classes')||[];
+  const users=DB.get('users')||[];
+  const today=todayStr();
+  const cls=classes.find(c=>c.id===classId);
+  const teacher=users.find(u=>u.id===cls?.teacherId);
+
+  let todayAtt=[];
+  try{
+    const all = await ATT.loadDay(today);
+    todayAtt = all.filter(a=>a.classId===classId);
+  }catch(e){
+    todayAtt = ATT.getAll().filter(a=>a.date===today&&a.classId===classId);
+  }
+
+  const clsStudents = students.filter(s=>s.classId===classId);
+  const presentIds = new Set(todayAtt.filter(a=>a.present).map(a=>a.studentId));
+  const absentIds = new Set(todayAtt.filter(a=>!a.present).map(a=>a.studentId));
+
+  const presentStudents = clsStudents.filter(s=>presentIds.has(s.id));
+  const absentStudents = clsStudents.filter(s=>absentIds.has(s.id));
+
+  const listRows = (list)=> list.length
+    ? list.map(s=>`<tr><td><div class="flex-gap">${avatar(s.av,s.color,30)} ${s.name}</div></td></tr>`).join('')
+    : `<tr><td style="text-align:center;color:var(--sub);padding:14px">لا يوجد</td></tr>`;
+
+  document.body.insertAdjacentHTML('beforeend',`
+  <div class="modal-overlay" id="class-att-modal" onclick="if(event.target===this)this.remove()">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:560px">
+      <div class="flex-between" style="margin-bottom:6px">
+        <div>
+          <div class="modal-title" style="margin-bottom:4px">${cls?.name||'فوج'}</div>
+          <div style="font-size:12px;color:var(--sub)">👨‍🏫 الأستاذ: ${teacher?.name||'—'}</div>
+        </div>
+        <button onclick="document.getElementById('class-att-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--sub);line-height:1">✕</button>
+      </div>
+      <div class="stats-row" style="margin:12px 0 16px">
+        ${[
+          {icon:'👥',label:'إجمالي الطلبة',val:clsStudents.length,color:'#3b82f6',border:'#dbeafe'},
+          {icon:'✅',label:'الحاضرون',val:presentStudents.length,color:'#10b981',border:'#d1fae5'},
+          {icon:'❌',label:'الغائبون',val:absentStudents.length,color:'#ef4444',border:'#fee2e2'},
+        ].map(s=>`<div class="stat-card" style="border-color:${s.border}33">
+          <div class="stat-icon">${s.icon}</div>
+          <div class="stat-num" style="color:${s.color}">${s.val}</div>
+          <div class="stat-label">${s.label}</div>
+        </div>`).join('')}
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-weight:800;font-size:13.5px;margin-bottom:8px">✅ الطلبة الحاضرون</div>
+        <div class="table-wrap"><table><tbody>${listRows(presentStudents)}</tbody></table></div>
+      </div>
+      <div>
+        <div style="font-weight:800;font-size:13.5px;margin-bottom:8px">❌ الطلبة الغائبون</div>
+        <div class="table-wrap"><table><tbody>${listRows(absentStudents)}</tbody></table></div>
+      </div>
+    </div>
+  </div>`);
+}
 // ══════════════════════════════════════════════════
 async function showTodayDetail(type){
   const students=DB.get('students')||[];
@@ -2081,29 +2211,6 @@ async function saveAttendance(){
   window._attDeleted = new Set();
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
   notify('✅ تم حفظ الحضور بنجاح');
-
-  // عرض نافذة إشعار SMS
-  const presentCount = records.filter(r=>r.present===true).length;
-  const absentCount = records.filter(r=>r.present===false).length;
-  const classes = DB.get('classes')||[];
-  const cls = classes.find(c=>c.id===currentUser.classId);
-  const clsName = cls?.name || currentUser.classId || '';
-  const teacherName = currentUser.name || '';
-  const dateLabel = new Date(date).toLocaleDateString('ar-DZ',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-  setTimeout(()=>{
-    if(confirm('هل تريد إرسال إشعار إلى الإدارة؟')){
-      const msg = `تم تسجيل حضور وغياب الفوج: ${clsName}
-المعلم: ${teacherName}
-التاريخ: ${dateLabel}
-عدد الحاضرين: ${presentCount}
-عدد الغائبين: ${absentCount}
-تم حفظ سجل الحضور والغياب بنجاح.`;
-      const encodedMsg = encodeURIComponent(msg);
-      // WhatsApp يعمل على جميع الهواتف وجميع الشرائح
-      const waLink = `https://wa.me/213667556648?text=${encodedMsg}`;
-      window.open(waLink, '_blank');
-    }
-  }, 300);
 }
 
 // ══════════════════════════════════════════════════
@@ -2798,7 +2905,7 @@ function pageAudit(){
 Object.assign(window, {
   doLogin, doLogout, toggleDark, togglePassView,
   setPage, toggleMenu, buildSidebar,
-  pageDashboard, showTodayDetail,
+  pageDashboard, showTodayDetail, toggleMonitorFilter, showClassAttendanceDetail,
   pageSettings, uploadLogo, removeLogo, changeAdminPass,
   pageClasses, showCreateClassModal, doCreateClass, deleteClass, showEditCredsModal, doEditCreds,
   showEditClassModal, doEditClass, selectEditColor,
