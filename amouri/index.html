@@ -1379,7 +1379,7 @@ async function pageDashboard(){
       </tr>`).join('');
 
     monitorHtml=`
-    <div class="card" style="grid-column:1/-1;margin-top:18px">
+    <div class="card" style="grid-column:1/-1;margin-bottom:18px">
       <div class="flex-between" style="margin-bottom:10px;flex-wrap:wrap;gap:8px">
         <div class="card-title" style="margin-bottom:0">📋 متابعة تسجيل الحضور اليوم</div>
         <button class="btn-sm" style="background:${showOnlyMissing?'#ef4444':'var(--green)'};padding:8px 14px" onclick="toggleMonitorFilter()">${showOnlyMissing?'عرض الكل':'عرض الأفواج التي لم تسجل فقط'}</button>
@@ -1412,6 +1412,7 @@ async function pageDashboard(){
     </div>
   </div>
   ${statsHtml}
+  ${monitorHtml}
   <div class="grid-2">
     <div class="card">
       <div class="card-title">📊 نسبة الحضور حسب الفوج</div>
@@ -1430,8 +1431,7 @@ async function pageDashboard(){
         </table>
       </div>
     </div>
-  </div>
-  ${monitorHtml}`;
+  </div>`;
 }
 
 // ══════════════════════════════════════════════════
