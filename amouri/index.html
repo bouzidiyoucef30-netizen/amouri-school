@@ -1093,6 +1093,8 @@ function doLogin(){
     loadLogo();
     buildSidebar(); setPage('dashboard');
     btn.innerHTML='🔐 تسجيل الدخول'; btn.disabled=false;
+    // تفعيل إشعارات FCM للمعلمين
+    if(currentUser.role==='teacher') initFCM();
   },600);
 }
 function doLogout(){
@@ -1375,7 +1377,8 @@ async function pageDashboard(){
         <td>${r.teacher?.name||'—'}</td>
         <td>${r.registered?badge('✅ تم التسجيل','green'):badge('❌ لم يسجل','red')}</td>
         <td>${r.lastTime}</td>
-        <td><button class="btn-sm" style="background:#3b82f6" onclick="showClassAttendanceDetail('${r.cls.id}')">عرض</button></td>
+        <td><button class="btn-sm" style="background:#3b82f6" onclick="showClassAttendanceDetail('${r.cls.id}')">عرض</button>${!r.registered?` <button class="btn-sm" style="background:#f59e0b;margin-right:4px" onclick="sendPushNotification('${r.cls.teacherId}','${(r.teacher?.name||'').replace(/'/g,"\\'")}','${r.cls.name.replace(/'/g,"\\'")}')">🔔 تذكير</button>`:''}
+        </td>
       </tr>`).join('');
 
     monitorHtml=`
@@ -1411,6 +1414,15 @@ async function pageDashboard(){
       <div class="page-sub">${new Date().toLocaleDateString('ar-DZ',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
     </div>
   </div>
+  ${currentUser.role==='teacher' && Notification.permission !== 'granted' ? `
+  <div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:12px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span style="font-size:22px">🔔</span>
+    <div style="flex:1;min-width:180px">
+      <div style="font-weight:800;font-size:13.5px;color:#92400e">لم تفعّل إشعارات الهاتف بعد</div>
+      <div style="font-size:12px;color:#b45309;margin-top:2px">فعّلها حتى تصلك تذكيرات من الإدارة عند نسيان تسجيل الحضور</div>
+    </div>
+    <button class="btn-sm" style="background:#f59e0b;color:#fff;white-space:nowrap" onclick="initFCM()">تفعيل الإشعارات 🔔</button>
+  </div>` : ''}
   ${statsHtml}
   ${monitorHtml}
   <div class="grid-2">
@@ -2080,6 +2092,15 @@ function pageTakeAtt(){
       <button class="btn" onclick="saveAttendance()">💾 حفظ الحضور</button>
     </div>
   </div>
+  ${Notification.permission !== 'granted' ? `
+  <div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:12px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span style="font-size:22px">🔔</span>
+    <div style="flex:1;min-width:180px">
+      <div style="font-weight:800;font-size:13.5px;color:#92400e">لم تفعّل إشعارات الهاتف بعد</div>
+      <div style="font-size:12px;color:#b45309;margin-top:2px">فعّلها حتى تصلك تذكيرات من الإدارة عند نسيان تسجيل الحضور</div>
+    </div>
+    <button class="btn-sm" style="background:#f59e0b;color:#fff;white-space:nowrap" onclick="initFCM()">تفعيل الإشعارات 🔔</button>
+  </div>` : ''}
   <div class="stats-row">
     ${[
       {icon:'👥',val:students.length,label:'إجمالي',color:'#3b82f6',border:'#dbeafe'},
@@ -2899,6 +2920,68 @@ function pageAudit(){
 }
 
 // ══════════════════════════════════════════════════
+// FIREBASE FCM — Push Notifications
+// ══════════════════════════════════════════════════
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA3SGQ8Z85i3xbWfgA_Bbte4blE86sgyhc",
+  authDomain: "school-attendance-b070a.firebaseapp.com",
+  projectId: "school-attendance-b070a",
+  storageBucket: "school-attendance-b070a.firebasestorage.app",
+  messagingSenderId: "532437656644",
+  appId: "1:532437656644:web:9e57a4192d3ac007eec811",
+};
+const VAPID_KEY = "BMc76F1TTytXzY6qVlTOsDm9wXYPerAwz5W8vOotKLKiqv3V9MhGBEXg0C0lerYT-8kJDX4Ktxm_8K1mZnnuW3I";
+const SUPABASE_EDGE_URL = "https://hnhbzvdsqmtvtgtpujiv.supabase.co/functions/v1/send-notification";
+
+let _fcmApp=null, _fcmMessaging=null;
+
+async function initFCM(){
+  try{
+    const {initializeApp,getApps} = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+    const {getMessaging,getToken,onMessage} = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js");
+    if(!getApps().length) _fcmApp = initializeApp(FIREBASE_CONFIG);
+    else _fcmApp = getApps()[0];
+    _fcmMessaging = getMessaging(_fcmApp);
+    // إشعارات داخل الموقع
+    onMessage(_fcmMessaging, payload=>{
+      const {title,body} = payload.notification||{};
+      notify(`🔔 ${title}: ${body}`);
+    });
+    // طلب الإذن وحفظ التوكن
+    const permission = await Notification.requestPermission();
+    if(permission === 'granted'){
+      const token = await getToken(_fcmMessaging,{vapidKey:VAPID_KEY});
+      if(token && currentUser){
+        // حفظ التوكن في بيانات المستخدم
+        const users = DB.get('users')||[];
+        const idx = users.findIndex(u=>u.id===currentUser.id);
+        if(idx!==-1 && users[idx].fcmToken !== token){
+          users[idx].fcmToken = token;
+          DB.set('users', users);
+        }
+        currentUser.fcmToken = token;
+      }
+    }
+  }catch(e){ console.warn('FCM init error:', e); }
+}
+
+async function sendPushNotification(teacherId, teacherName, className){
+  try{
+    const users = DB.get('users')||[];
+    const teacher = users.find(u=>u.id===teacherId);
+    if(!teacher?.fcmToken){ notify('⚠️ المعلم لم يفعّل الإشعارات بعد'); return; }
+    const res = await fetch(SUPABASE_EDGE_URL,{
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'Authorization':`Bearer ${SUPABASE_KEY}`},
+      body: JSON.stringify({token: teacher.fcmToken, teacherName, className})
+    });
+    const data = await res.json();
+    if(data.name==='projects' || res.ok){ notify('✅ تم إرسال التذكير للمعلم'); }
+    else{ notify('⚠️ فشل إرسال التذكير'); console.warn(data); }
+  }catch(e){ notify('⚠️ فشل إرسال التذكير'); console.warn(e); }
+}
+
+// ══════════════════════════════════════════════════
 // EXPOSE ALL FUNCTIONS TO GLOBAL SCOPE
 // (required because type="module" isolates scope)
 // ══════════════════════════════════════════════════
@@ -2916,14 +2999,14 @@ Object.assign(window, {
   showEditStudentModal, doEditStudent, selectStudentColor,
   pageStats, exportJSON, importJSON, generateStudentPDF,
   pageAudit,
-  copyText, notify,
+  copyText, notify, initFCM, sendPushNotification,
   loadSavedCredentials, loadLogo,
 });
 
-// تسجيل Service Worker للـ PWA
+// تسجيل Firebase Messaging Service Worker
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('/sw.js')
-    .then(()=>console.log('SW registered'))
+  navigator.serviceWorker.register('/firebase-messaging-sw.js')
+    .then(()=>console.log('FCM SW registered'))
     .catch(e=>console.log('SW error:', e));
 }
 </script>
