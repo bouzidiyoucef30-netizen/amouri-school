@@ -2,7 +2,8 @@
   "name": "مدرسة عموري للقرآن الكريم",
   "short_name": "عموري",
   "description": "نظام إدارة الحضور والغياب",
-  "start_url": "/",
+  "start_url": "/amouri/",
+  "scope": "/amouri/",
   "display": "standalone",
   "background_color": "#f0fdf4",
   "theme_color": "#064e3b",
@@ -11,9 +12,21 @@
   "dir": "rtl",
   "icons": [
     {
-      "src": "/icon.svg",
+      "src": "/amouri/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/amouri/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/amouri/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]
