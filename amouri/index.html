@@ -903,27 +903,14 @@ function startRealtime(){
 async function initApp(){
   if(SB_CONFIGURED){
     showSplash('🕌 مدرسة عموري للقرآن الكريم');
-  }
-  if(SB_CONFIGURED){
-    let loaded = false;
-    // حاول 3 مرات
-    for(let attempt=1; attempt<=3; attempt++){
-      try{
-        await Promise.race([
-          loadAllFromSupabase(),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')),15000))
-        ]);
-        loaded = true;
-        break;
-      }catch(e){
-        console.warn(`Load attempt ${attempt} failed:`, e.message);
-        if(attempt < 3) await new Promise(r=>setTimeout(r,2000));
-      }
-    }
-    if(!loaded){
-      console.warn('All attempts failed, using local data');
+    try{
+      await loadAllFromSupabase();
+    }catch(e){
+      console.warn('Supabase load failed, using local data:', e);
       KEYS.forEach(k=>{ try{ if(STORE[k]==null) STORE[k]=JSON.parse(localStorage.getItem('amouri_'+k)); }catch{} });
     }
+  } else {
+    await loadAllFromSupabase();
   }
   hideSplash();
   DB.init();
