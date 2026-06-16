@@ -451,6 +451,18 @@ if(SB_CONFIGURED){
 const STORE = {};
 const KEYS = ['users','classes','students','auditLog','schoolLogo','darkMode','init2']; // attendance → جدول مستقل
 
+// خريطة المفاتيح العربية → الإنجليزية (للتوافق مع البيانات القديمة)
+const AR_KEY_MAP = {
+  'المستخدمون': 'users',
+  'صفوف': 'classes',
+  'طلاب': 'students',
+  'سجل التدقيق': 'auditLog',
+  'شعار المدرسة': 'schoolLogo',
+  'الوضع المظلم': 'darkMode',
+  'حضور': 'attendance',
+  'رصيد محفوظ': 'init2',
+};
+
 async function loadAllFromSupabase(){
   if(!SB_CONFIGURED){
     // Fallback: use localStorage only
@@ -463,8 +475,11 @@ async function loadAllFromSupabase(){
       .from('amouri_store')
       .select('key, value');
     if(error) throw error;
-    // Load fetched rows into STORE
-    (data||[]).forEach(row => { STORE[row.key] = row.value; });
+    // Load fetched rows into STORE — مع دعم المفاتيح العربية والإنجليزية
+    (data||[]).forEach(row => {
+      const k = AR_KEY_MAP[row.key] || row.key;
+      STORE[k] = row.value;
+    });
     // Keys not in DB stay null
     KEYS.forEach(k=>{ if(!(k in STORE)) STORE[k]=null; });
   } catch(e){
@@ -853,7 +868,8 @@ function startRealtime(){
       { event: "*", schema: "public", table: "amouri_store" },
       (payload) => {
         if(payload.new && payload.new.key){
-          const k = payload.new.key;
+          const rawKey = payload.new.key;
+          const k = AR_KEY_MAP[rawKey] || rawKey;
           // لا نحدث attendance من amouri_store (لها جدول مستقل)
           if(k === 'attendance') return;
           // لا نستبدل البيانات إذا كنا نحفظ نفس المفتاح حالياً
@@ -3048,11 +3064,16 @@ Object.assign(window, {
   loadSavedCredentials, loadLogo,
 });
 
-// تسجيل Firebase Messaging Service Worker
+// تسجيل Service Workers
 if('serviceWorker' in navigator){
+  // Firebase Messaging SW للإشعارات
   navigator.serviceWorker.register('/firebase-messaging-sw.js')
     .then(()=>console.log('FCM SW registered'))
-    .catch(e=>console.log('SW error:', e));
+    .catch(e=>console.warn('FCM SW error:', e));
+  // PWA SW للاختصار والعمل بدون إنترنت
+  navigator.serviceWorker.register('/sw.js')
+    .then(()=>console.log('PWA SW registered'))
+    .catch(e=>console.warn('PWA SW error:', e));
 }
 </script>
 </body>
