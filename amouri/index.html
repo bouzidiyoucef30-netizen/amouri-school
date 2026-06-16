@@ -900,12 +900,22 @@ function startRealtime(){
 // ══════════════════════════════════════════════════
 // BOOTSTRAP — تحميل البيانات ثم تشغيل التطبيق
 // ══════════════════════════════════════════════════
-if(SB_CONFIGURED){
-  showSplash('🕌 مدرسة عموري للقرآن الكريم');
-}
-await loadAllFromSupabase();
-hideSplash();
-DB.init();
+async function initApp(){
+  if(SB_CONFIGURED){
+    showSplash('🕌 مدرسة عموري للقرآن الكريم');
+  }
+  try{
+    await Promise.race([
+      loadAllFromSupabase(),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')),8000))
+    ]);
+  }catch(e){
+    console.warn('Load timeout or error, using local data:', e);
+    // fallback to localStorage
+    KEYS.forEach(k=>{ try{ if(STORE[k]==null) STORE[k]=JSON.parse(localStorage.getItem('amouri_'+k)); }catch{} });
+  }
+  hideSplash();
+  DB.init();
 
 // ═══════════════════════════════════════════════════════
 // MIGRATION: تحميل الحضور القديم من amouri_store إلى ATT
@@ -952,25 +962,25 @@ DB.init();
   }catch(e){ console.warn('Migration failed:', e); }
 })();
 
-startRealtime();
+  startRealtime();
 
-// expose globals needed by inline onclick handlers
-window.DB = DB;
-
-// Show Supabase setup banner if not configured
-if(!SB_CONFIGURED){
-  setTimeout(()=>{
-    document.body.insertAdjacentHTML('beforeend',`
-    <div id="sb-banner" style="position:fixed;bottom:0;left:0;right:0;z-index:9998;background:#1e293b;color:#e2e8f0;padding:14px 20px;font-family:Cairo,sans-serif;font-size:13px;border-top:3px solid #f59e0b">
-      <div style="max-width:700px;margin:0 auto">
-        <div style="font-weight:800;color:#f59e0b;margin-bottom:6px">⚠️ وضع محلي فقط — البيانات غير مشتركة بين الأجهزة</div>
-        <div style="color:#94a3b8;font-size:12px">لتفعيل المشاركة بين الأجهزة، افتح الملف وأضف إعدادات Supabase في المتغيرين <code style="background:#334155;padding:2px 6px;border-radius:4px">SUPABASE_URL</code> و <code style="background:#334155;padding:2px 6px;border-radius:4px">SUPABASE_KEY</code></div>
-        <div style="margin-top:8px"><a href="https://supabase.com" target="_blank" style="color:#10b981;font-weight:700">🔗 أنشئ مشروع Supabase مجاني</a> — ثم انسخ الإعدادات إلى الملف</div>
-        <button onclick="document.getElementById('sb-banner').remove()" style="position:absolute;top:12px;left:16px;background:none;border:none;color:#64748b;cursor:pointer;font-size:18px">✕</button>
-      </div>
-    </div>`);
-  }, 1000);
+  // Show Supabase setup banner if not configured
+  if(!SB_CONFIGURED){
+    setTimeout(()=>{
+      document.body.insertAdjacentHTML('beforeend',`
+      <div id="sb-banner" style="position:fixed;bottom:0;left:0;right:0;z-index:9998;background:#1e293b;color:#e2e8f0;padding:14px 20px;font-family:Cairo,sans-serif;font-size:13px;border-top:3px solid #f59e0b">
+        <div style="max-width:700px;margin:0 auto">
+          <div style="font-weight:800;color:#f59e0b;margin-bottom:6px">⚠️ وضع محلي فقط — البيانات غير مشتركة بين الأجهزة</div>
+          <div style="color:#94a3b8;font-size:12px">لتفعيل المشاركة بين الأجهزة، افتح الملف وأضف إعدادات Supabase في المتغيرين <code style="background:#334155;padding:2px 6px;border-radius:4px">SUPABASE_URL</code> و <code style="background:#334155;padding:2px 6px;border-radius:4px">SUPABASE_KEY</code></div>
+          <div style="margin-top:8px"><a href="https://supabase.com" target="_blank" style="color:#10b981;font-weight:700">🔗 أنشئ مشروع Supabase مجاني</a> — ثم انسخ الإعدادات إلى الملف</div>
+          <button onclick="document.getElementById('sb-banner').remove()" style="position:absolute;top:12px;left:16px;background:none;border:none;color:#64748b;cursor:pointer;font-size:18px">✕</button>
+        </div>
+      </div>`);
+    }, 1000);
+  }
 }
+
+initApp();
 
 // ══════════════════════════════════════════════════
 // STATE
@@ -1093,8 +1103,6 @@ function doLogin(){
     loadLogo();
     buildSidebar(); setPage('dashboard');
     btn.innerHTML='🔐 تسجيل الدخول'; btn.disabled=false;
-    // تفعيل إشعارات FCM للمعلمين
-    if(currentUser.role==='teacher') initFCM();
   },600);
 }
 function doLogout(){
@@ -2933,26 +2941,22 @@ const FIREBASE_CONFIG = {
 const VAPID_KEY = "BMc76F1TTytXzY6qVlTOsDm9wXYPerAwz5W8vOotKLKiqv3V9MhGBEXg0C0lerYT-8kJDX4Ktxm_8K1mZnnuW3I";
 const SUPABASE_EDGE_URL = "https://hnhbzvdsqmtvtgtpujiv.supabase.co/functions/v1/send-notification";
 
-let _fcmApp=null, _fcmMessaging=null;
-
 async function initFCM(){
   try{
     const {initializeApp,getApps} = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
     const {getMessaging,getToken,onMessage} = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js");
-    if(!getApps().length) _fcmApp = initializeApp(FIREBASE_CONFIG);
-    else _fcmApp = getApps()[0];
-    _fcmMessaging = getMessaging(_fcmApp);
-    // إشعارات داخل الموقع
-    onMessage(_fcmMessaging, payload=>{
+    let app;
+    if(!getApps().length) app = initializeApp(FIREBASE_CONFIG);
+    else app = getApps()[0];
+    const messaging = getMessaging(app);
+    onMessage(messaging, payload=>{
       const {title,body} = payload.notification||{};
       notify(`🔔 ${title}: ${body}`);
     });
-    // طلب الإذن وحفظ التوكن
     const permission = await Notification.requestPermission();
     if(permission === 'granted'){
-      const token = await getToken(_fcmMessaging,{vapidKey:VAPID_KEY});
+      const token = await getToken(messaging,{vapidKey:VAPID_KEY});
       if(token && currentUser){
-        // حفظ التوكن في بيانات المستخدم
         const users = DB.get('users')||[];
         const idx = users.findIndex(u=>u.id===currentUser.id);
         if(idx!==-1 && users[idx].fcmToken !== token){
@@ -2960,6 +2964,7 @@ async function initFCM(){
           DB.set('users', users);
         }
         currentUser.fcmToken = token;
+        notify('✅ تم تفعيل الإشعارات');
       }
     }
   }catch(e){ console.warn('FCM init error:', e); }
@@ -2972,11 +2977,11 @@ async function sendPushNotification(teacherId, teacherName, className){
     if(!teacher?.fcmToken){ notify('⚠️ المعلم لم يفعّل الإشعارات بعد'); return; }
     const res = await fetch(SUPABASE_EDGE_URL,{
       method:'POST',
-      headers:{'Content-Type':'application/json', 'Authorization':`Bearer ${SUPABASE_KEY}`},
+      headers:{'Content-Type':'application/json','Authorization':`Bearer ${SUPABASE_KEY}`},
       body: JSON.stringify({token: teacher.fcmToken, teacherName, className})
     });
     const data = await res.json();
-    if(data.name==='projects' || res.ok){ notify('✅ تم إرسال التذكير للمعلم'); }
+    if(res.ok){ notify('✅ تم إرسال التذكير للمعلم'); }
     else{ notify('⚠️ فشل إرسال التذكير'); console.warn(data); }
   }catch(e){ notify('⚠️ فشل إرسال التذكير'); console.warn(e); }
 }
