@@ -1643,7 +1643,11 @@ function pageClasses(){
         <div class="cred-row" style="margin-bottom:0"><span>اسم المعلم:</span><span style="font-weight:700">${teacher.name}</span></div>
       </div>
       <button class="btn-sm" style="background:#3b82f6;margin-top:12px;width:100%" onclick="showEditCredsModal('${teacher.id}')">✏️ تعديل بيانات الدخول</button>
-    </div>`:''}
+    </div>`:`<div class="card" style="margin-bottom:16px;border:2px dashed var(--border)">
+      <div class="card-title">👨‍🏫 لا يوجد معلم مرتبط بهذا الفوج</div>
+      <p style="color:var(--sub);font-size:13px;margin-bottom:14px">أنشئ بيانات دخول للمعلم المسؤول عن هذا الفوج</p>
+      <button class="btn" style="width:100%" onclick="showCreateTeacherModal('${cls?.id}')">➕ إنشاء بيانات دخول للمعلم</button>
+    </div>`}
     <div class="card">
       <div class="table-wrap">
         <table>
@@ -1806,6 +1810,56 @@ function showCredsModal(clsName,teacherName,code,pass){
     </div>
   </div>`);
 }
+function showCreateTeacherModal(classId){
+  const classes=DB.get('classes')||[];
+  const cls=classes.find(c=>c.id===classId);
+  document.body.insertAdjacentHTML('beforeend',`
+  <div class="modal-overlay" id="create-teacher-modal" onclick="if(event.target===this)this.remove()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="flex-between" style="margin-bottom:16px">
+        <div class="modal-title">➕ إنشاء بيانات دخول للمعلم</div>
+        <button onclick="document.getElementById('create-teacher-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--sub)">✕</button>
+      </div>
+      <div style="font-size:13px;color:var(--sub);margin-bottom:16px">الفوج: <strong>${cls?.name}</strong></div>
+      <div class="form-group">
+        <label class="form-label">اسم المعلم</label>
+        <input class="input" id="new-teacher-name" placeholder="اسم المعلم الكامل">
+      </div>
+      <div class="form-group">
+        <label class="form-label">رمز الدخول</label>
+        <input class="input" id="new-teacher-code" placeholder="رمز الدخول (يمكن تغييره)">
+      </div>
+      <div class="form-group">
+        <label class="form-label">كلمة المرور</label>
+        <input class="input" id="new-teacher-pass" placeholder="كلمة المرور" type="text">
+      </div>
+      <button class="btn" style="width:100%;margin-top:8px" onclick="doCreateTeacher('${classId}')">💾 حفظ وإنشاء الحساب</button>
+    </div>
+  </div>`);
+}
+
+function doCreateTeacher(classId){
+  const name=document.getElementById('new-teacher-name').value.trim();
+  const code=document.getElementById('new-teacher-code').value.trim();
+  const pass=document.getElementById('new-teacher-pass').value.trim();
+  if(!name||!code||!pass){notify('⚠️ أدخل جميع البيانات');return;}
+  const users=DB.get('users')||[];
+  const classes=DB.get('classes')||[];
+  if(users.find(u=>u.classCode===code||u.email===code)){notify('⚠️ رمز الدخول مستخدم مسبقاً');return;}
+  const teacherId=genId('u');
+  const av=name[0]||'م';
+  const colors=['#10b981','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#06b6d4'];
+  const color=colors[Math.floor(Math.random()*colors.length)];
+  users.push({id:teacherId,name,email:'',classCode:code,password:pass,role:'teacher',classId,av,color});
+  DB.set('users',users);
+  const idx=classes.findIndex(c=>c.id===classId);
+  if(idx!==-1){classes[idx].teacherId=teacherId;DB.set('classes',classes);}
+  document.getElementById('create-teacher-modal').remove();
+  notify('✅ تم إنشاء حساب المعلم بنجاح');
+  setPage('classes');
+  setTimeout(()=>{window._selectedClass=classId;setPage('classes');},100);
+}
+
 function showEditCredsModal(teacherId){
   const users=DB.get('users')||[];
   const teacher=users.find(u=>u.id===teacherId);
@@ -3014,7 +3068,7 @@ Object.assign(window, {
   pageSettings, uploadLogo, removeLogo, changeAdminPass,
   pageClasses, showCreateClassModal, doCreateClass, deleteClass, showEditCredsModal, doEditCreds,
   showEditClassModal, doEditClass, selectEditColor,
-  showCredsModal, selectColor,
+  showCredsModal, selectColor, showCreateTeacherModal, doCreateTeacher,
   pageTakeAtt, initAttMap, changeAttDate, toggleStudent, markAll, saveAttendance, loadMoreStudents,
   pageCalendar, calNav, calSetStudent, calToggleDay, calSearchStudents, calPickStudent, _loadCalStudent,
   pageStudents, deleteStudent, showAddStudentModal, doAddStudent, updateStudentsTable,
