@@ -451,18 +451,6 @@ if(SB_CONFIGURED){
 const STORE = {};
 const KEYS = ['users','classes','students','auditLog','schoolLogo','darkMode','init2']; // attendance → جدول مستقل
 
-// خريطة المفاتيح العربية → الإنجليزية (للتوافق مع البيانات القديمة)
-const AR_KEY_MAP = {
-  'المستخدمون': 'users',
-  'صفوف': 'classes',
-  'طلاب': 'students',
-  'سجل التدقيق': 'auditLog',
-  'شعار المدرسة': 'schoolLogo',
-  'الوضع المظلم': 'darkMode',
-  'حضور': 'attendance',
-  'رصيد محفوظ': 'init2',
-};
-
 async function loadAllFromSupabase(){
   if(!SB_CONFIGURED){
     // Fallback: use localStorage only
@@ -475,11 +463,8 @@ async function loadAllFromSupabase(){
       .from('amouri_store')
       .select('key, value');
     if(error) throw error;
-    // Load fetched rows into STORE — مع دعم المفاتيح العربية والإنجليزية
-    (data||[]).forEach(row => {
-      const k = AR_KEY_MAP[row.key] || row.key;
-      STORE[k] = row.value;
-    });
+    // Load fetched rows into STORE
+    (data||[]).forEach(row => { STORE[row.key] = row.value; });
     // Keys not in DB stay null
     KEYS.forEach(k=>{ if(!(k in STORE)) STORE[k]=null; });
   } catch(e){
@@ -868,8 +853,7 @@ function startRealtime(){
       { event: "*", schema: "public", table: "amouri_store" },
       (payload) => {
         if(payload.new && payload.new.key){
-          const rawKey = payload.new.key;
-          const k = AR_KEY_MAP[rawKey] || rawKey;
+          const k = payload.new.key;
           // لا نحدث attendance من amouri_store (لها جدول مستقل)
           if(k === 'attendance') return;
           // لا نستبدل البيانات إذا كنا نحفظ نفس المفتاح حالياً
@@ -916,20 +900,12 @@ function startRealtime(){
 // ══════════════════════════════════════════════════
 // BOOTSTRAP — تحميل البيانات ثم تشغيل التطبيق
 // ══════════════════════════════════════════════════
-async function initApp(){
-  if(SB_CONFIGURED){
-    showSplash('🕌 مدرسة عموري للقرآن الكريم');
-    try{
-      await loadAllFromSupabase();
-    }catch(e){
-      console.warn('Supabase load failed, using local data:', e);
-      KEYS.forEach(k=>{ try{ if(STORE[k]==null) STORE[k]=JSON.parse(localStorage.getItem('amouri_'+k)); }catch{} });
-    }
-  } else {
-    await loadAllFromSupabase();
-  }
-  hideSplash();
-  DB.init();
+if(SB_CONFIGURED){
+  showSplash('🕌 مدرسة عموري للقرآن الكريم');
+}
+await loadAllFromSupabase();
+hideSplash();
+DB.init();
 
 // ═══════════════════════════════════════════════════════
 // MIGRATION: تحميل الحضور القديم من amouri_store إلى ATT
@@ -976,25 +952,25 @@ async function initApp(){
   }catch(e){ console.warn('Migration failed:', e); }
 })();
 
-  startRealtime();
+startRealtime();
 
-  // Show Supabase setup banner if not configured
-  if(!SB_CONFIGURED){
-    setTimeout(()=>{
-      document.body.insertAdjacentHTML('beforeend',`
-      <div id="sb-banner" style="position:fixed;bottom:0;left:0;right:0;z-index:9998;background:#1e293b;color:#e2e8f0;padding:14px 20px;font-family:Cairo,sans-serif;font-size:13px;border-top:3px solid #f59e0b">
-        <div style="max-width:700px;margin:0 auto">
-          <div style="font-weight:800;color:#f59e0b;margin-bottom:6px">⚠️ وضع محلي فقط — البيانات غير مشتركة بين الأجهزة</div>
-          <div style="color:#94a3b8;font-size:12px">لتفعيل المشاركة بين الأجهزة، افتح الملف وأضف إعدادات Supabase في المتغيرين <code style="background:#334155;padding:2px 6px;border-radius:4px">SUPABASE_URL</code> و <code style="background:#334155;padding:2px 6px;border-radius:4px">SUPABASE_KEY</code></div>
-          <div style="margin-top:8px"><a href="https://supabase.com" target="_blank" style="color:#10b981;font-weight:700">🔗 أنشئ مشروع Supabase مجاني</a> — ثم انسخ الإعدادات إلى الملف</div>
-          <button onclick="document.getElementById('sb-banner').remove()" style="position:absolute;top:12px;left:16px;background:none;border:none;color:#64748b;cursor:pointer;font-size:18px">✕</button>
-        </div>
-      </div>`);
-    }, 1000);
-  }
+// expose globals needed by inline onclick handlers
+window.DB = DB;
+
+// Show Supabase setup banner if not configured
+if(!SB_CONFIGURED){
+  setTimeout(()=>{
+    document.body.insertAdjacentHTML('beforeend',`
+    <div id="sb-banner" style="position:fixed;bottom:0;left:0;right:0;z-index:9998;background:#1e293b;color:#e2e8f0;padding:14px 20px;font-family:Cairo,sans-serif;font-size:13px;border-top:3px solid #f59e0b">
+      <div style="max-width:700px;margin:0 auto">
+        <div style="font-weight:800;color:#f59e0b;margin-bottom:6px">⚠️ وضع محلي فقط — البيانات غير مشتركة بين الأجهزة</div>
+        <div style="color:#94a3b8;font-size:12px">لتفعيل المشاركة بين الأجهزة، افتح الملف وأضف إعدادات Supabase في المتغيرين <code style="background:#334155;padding:2px 6px;border-radius:4px">SUPABASE_URL</code> و <code style="background:#334155;padding:2px 6px;border-radius:4px">SUPABASE_KEY</code></div>
+        <div style="margin-top:8px"><a href="https://supabase.com" target="_blank" style="color:#10b981;font-weight:700">🔗 أنشئ مشروع Supabase مجاني</a> — ثم انسخ الإعدادات إلى الملف</div>
+        <button onclick="document.getElementById('sb-banner').remove()" style="position:absolute;top:12px;left:16px;background:none;border:none;color:#64748b;cursor:pointer;font-size:18px">✕</button>
+      </div>
+    </div>`);
+  }, 1000);
 }
-
-initApp();
 
 // ══════════════════════════════════════════════════
 // STATE
@@ -1117,6 +1093,7 @@ function doLogin(){
     loadLogo();
     buildSidebar(); setPage('dashboard');
     btn.innerHTML='🔐 تسجيل الدخول'; btn.disabled=false;
+    if(currentUser.role==='teacher') setTimeout(initFCM, 1500);
   },600);
 }
 function doLogout(){
@@ -1369,42 +1346,39 @@ async function pageDashboard(){
   let monitorHtml='';
   if(currentUser.role==='admin'){
     const users=DB.get('users')||[];
-    const showOnlyMissing = !!window._monitorOnlyMissing;
-
-    const monitorRows = classes.map(cls=>{
+    const showOnlyMissing=!!window._monitorOnlyMissing;
+    const monitorRows=classes.map(cls=>{
       const teacher=users.find(u=>u.id===cls.teacherId);
-      const clsRecords = todayAtt.filter(a=>a.classId===cls.id);
-      const registered = clsRecords.length>0;
+      const clsRecords=todayAtt.filter(a=>a.classId===cls.id);
+      const registered=clsRecords.length>0;
       let lastTime='—';
       if(registered){
-        const times = clsRecords.map(a=>a.savedAt).filter(Boolean);
+        const times=clsRecords.map(a=>a.savedAt).filter(Boolean);
         if(times.length){
-          const latest = times.reduce((a,b)=> (new Date(a)>new Date(b)?a:b));
+          const latest=times.reduce((a,b)=>(new Date(a)>new Date(b)?a:b));
           const d=new Date(latest);
-          if(!isNaN(d.getTime())) lastTime = d.toLocaleTimeString('ar-DZ',{hour:'2-digit',minute:'2-digit'});
+          if(!isNaN(d.getTime())) lastTime=d.toLocaleTimeString('ar-DZ',{hour:'2-digit',minute:'2-digit'});
         }
       }
-      return {cls, teacher, registered, lastTime};
+      return {cls,teacher,registered,lastTime};
     });
-
-    const totalClasses = classes.length;
-    const registeredCount = monitorRows.filter(r=>r.registered).length;
-    const notRegisteredCount = totalClasses - registeredCount;
-
-    const visibleRows = showOnlyMissing ? monitorRows.filter(r=>!r.registered) : monitorRows;
-
-    const monitorTableRows = visibleRows.map(r=>`
-      <tr style="${!r.registered?'background:var(--red2)':''}">
-        <td><div class="flex-gap">${avatar(r.cls.av||'ف',r.cls.color)} ${r.cls.name}</div></td>
+    const totalClasses=classes.length;
+    const registeredCount=monitorRows.filter(r=>r.registered).length;
+    const notRegisteredCount=totalClasses-registeredCount;
+    const visibleRows=showOnlyMissing?monitorRows.filter(r=>!r.registered):monitorRows;
+    const monitorTableRows=visibleRows.map(r=>`
+      <tr style="${!r.registered?'background:var(--red2,rgba(239,68,68,.08))':''}">
+        <td><div class="flex-gap">${avatar(r.cls.av||r.cls.name[0],r.cls.color)} ${r.cls.name}</div></td>
         <td>${r.teacher?.name||'—'}</td>
         <td>${r.registered?badge('✅ تم التسجيل','green'):badge('❌ لم يسجل','red')}</td>
         <td>${r.lastTime}</td>
-        <td><button class="btn-sm" style="background:#3b82f6" onclick="showClassAttendanceDetail('${r.cls.id}')">عرض</button>${!r.registered?` <button class="btn-sm" style="background:#f59e0b;margin-right:4px" onclick="this.disabled=true;this.textContent='✅ تم';sendPushNotification('${r.cls.teacherId}','${(r.teacher?.name||'').replace(/'/g,"\\'")}','${r.cls.name.replace(/'/g,"\\'")}')">🔔 تذكير</button>`:''}
+        <td>
+          <button class="btn-sm" style="background:#3b82f6" onclick="showClassAttendanceDetail('${r.cls.id}')">عرض</button>
+          ${!r.registered?`<button class="btn-sm" style="background:#f59e0b;margin-right:4px" onclick="this.disabled=true;this.textContent='✅ تم';sendPushNotification('${r.cls.teacherId}','${(r.teacher?.name||'').replace(/'/g,"\\'")}','${r.cls.name.replace(/'/g,"\\'")}')">🔔 تذكير</button>`:''}
         </td>
       </tr>`).join('');
-
     monitorHtml=`
-    <div class="card" style="grid-column:1/-1;margin-bottom:18px">
+    <div class="card" style="margin-bottom:18px">
       <div class="flex-between" style="margin-bottom:10px;flex-wrap:wrap;gap:8px">
         <div class="card-title" style="margin-bottom:0">📋 متابعة تسجيل الحضور اليوم</div>
         <button class="btn-sm" style="background:${showOnlyMissing?'#ef4444':'var(--green)'};padding:8px 14px" onclick="toggleMonitorFilter()">${showOnlyMissing?'عرض الكل':'عرض الأفواج التي لم تسجل فقط'}</button>
@@ -1436,17 +1410,17 @@ async function pageDashboard(){
       <div class="page-sub">${new Date().toLocaleDateString('ar-DZ',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
     </div>
   </div>
-  ${currentUser.role==='teacher' && Notification.permission !== 'granted' ? `
+  ${currentUser.role==='teacher'&&Notification.permission!=='granted'?`
   <div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:12px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <span style="font-size:22px">🔔</span>
     <div style="flex:1;min-width:180px">
       <div style="font-weight:800;font-size:13.5px;color:#92400e">لم تفعّل إشعارات الهاتف بعد</div>
-      <div style="font-size:12px;color:#b45309;margin-top:2px">فعّلها حتى تصلك تذكيرات من الإدارة عند نسيان تسجيل الحضور</div>
+      <div style="font-size:12px;color:#b45309;margin-top:2px">فعّلها حتى تصلك تذكيرات من الإدارة</div>
     </div>
     <button class="btn-sm" style="background:#f59e0b;color:#fff;white-space:nowrap" onclick="initFCM()">تفعيل الإشعارات 🔔</button>
-  </div>` : ''}
-  ${statsHtml}
+  </div>`:''}
   ${monitorHtml}
+  ${statsHtml}
   <div class="grid-2">
     <div class="card">
       <div class="card-title">📊 نسبة الحضور حسب الفوج</div>
@@ -1469,73 +1443,7 @@ async function pageDashboard(){
 }
 
 // ══════════════════════════════════════════════════
-// DASHBOARD: Attendance Monitor — filter toggle & class detail modal
-// ══════════════════════════════════════════════════
-function toggleMonitorFilter(){
-  window._monitorOnlyMissing = !window._monitorOnlyMissing;
-  document.getElementById('page-content').innerHTML='';
-  setPage('dashboard');
-}
-
-async function showClassAttendanceDetail(classId){
-  const students=DB.get('students')||[];
-  const classes=DB.get('classes')||[];
-  const users=DB.get('users')||[];
-  const today=todayStr();
-  const cls=classes.find(c=>c.id===classId);
-  const teacher=users.find(u=>u.id===cls?.teacherId);
-
-  let todayAtt=[];
-  try{
-    const all = await ATT.loadDay(today);
-    todayAtt = all.filter(a=>a.classId===classId);
-  }catch(e){
-    todayAtt = ATT.getAll().filter(a=>a.date===today&&a.classId===classId);
-  }
-
-  const clsStudents = students.filter(s=>s.classId===classId);
-  const presentIds = new Set(todayAtt.filter(a=>a.present).map(a=>a.studentId));
-  const absentIds = new Set(todayAtt.filter(a=>!a.present).map(a=>a.studentId));
-
-  const presentStudents = clsStudents.filter(s=>presentIds.has(s.id));
-  const absentStudents = clsStudents.filter(s=>absentIds.has(s.id));
-
-  const listRows = (list)=> list.length
-    ? list.map(s=>`<tr><td><div class="flex-gap">${avatar(s.av,s.color,30)} ${s.name}</div></td></tr>`).join('')
-    : `<tr><td style="text-align:center;color:var(--sub);padding:14px">لا يوجد</td></tr>`;
-
-  document.body.insertAdjacentHTML('beforeend',`
-  <div class="modal-overlay" id="class-att-modal" onclick="if(event.target===this)this.remove()">
-    <div class="modal" onclick="event.stopPropagation()" style="max-width:560px">
-      <div class="flex-between" style="margin-bottom:6px">
-        <div>
-          <div class="modal-title" style="margin-bottom:4px">${cls?.name||'فوج'}</div>
-          <div style="font-size:12px;color:var(--sub)">👨‍🏫 الأستاذ: ${teacher?.name||'—'}</div>
-        </div>
-        <button onclick="document.getElementById('class-att-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--sub);line-height:1">✕</button>
-      </div>
-      <div class="stats-row" style="margin:12px 0 16px">
-        ${[
-          {icon:'👥',label:'إجمالي الطلبة',val:clsStudents.length,color:'#3b82f6',border:'#dbeafe'},
-          {icon:'✅',label:'الحاضرون',val:presentStudents.length,color:'#10b981',border:'#d1fae5'},
-          {icon:'❌',label:'الغائبون',val:absentStudents.length,color:'#ef4444',border:'#fee2e2'},
-        ].map(s=>`<div class="stat-card" style="border-color:${s.border}33">
-          <div class="stat-icon">${s.icon}</div>
-          <div class="stat-num" style="color:${s.color}">${s.val}</div>
-          <div class="stat-label">${s.label}</div>
-        </div>`).join('')}
-      </div>
-      <div style="margin-bottom:14px">
-        <div style="font-weight:800;font-size:13.5px;margin-bottom:8px">✅ الطلبة الحاضرون</div>
-        <div class="table-wrap"><table><tbody>${listRows(presentStudents)}</tbody></table></div>
-      </div>
-      <div>
-        <div style="font-weight:800;font-size:13.5px;margin-bottom:8px">❌ الطلبة الغائبون</div>
-        <div class="table-wrap"><table><tbody>${listRows(absentStudents)}</tbody></table></div>
-      </div>
-    </div>
-  </div>`);
-}
+// DASHBOARD: Today Detail Modal (present/absent)
 // ══════════════════════════════════════════════════
 async function showTodayDetail(type){
   const students=DB.get('students')||[];
@@ -2114,15 +2022,6 @@ function pageTakeAtt(){
       <button class="btn" onclick="saveAttendance()">💾 حفظ الحضور</button>
     </div>
   </div>
-  ${Notification.permission !== 'granted' ? `
-  <div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:12px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-    <span style="font-size:22px">🔔</span>
-    <div style="flex:1;min-width:180px">
-      <div style="font-weight:800;font-size:13.5px;color:#92400e">لم تفعّل إشعارات الهاتف بعد</div>
-      <div style="font-size:12px;color:#b45309;margin-top:2px">فعّلها حتى تصلك تذكيرات من الإدارة عند نسيان تسجيل الحضور</div>
-    </div>
-    <button class="btn-sm" style="background:#f59e0b;color:#fff;white-space:nowrap" onclick="initFCM()">تفعيل الإشعارات 🔔</button>
-  </div>` : ''}
   <div class="stats-row">
     ${[
       {icon:'👥',val:students.length,label:'إجمالي',color:'#3b82f6',border:'#dbeafe'},
@@ -2253,6 +2152,8 @@ async function saveAttendance(){
 
   window._attDeleted = new Set();
   addAuditLog('تسجيل حضور',`تسجيل حضور ${currentUser.class?.name||''} ليوم ${date}`);
+  notify('✅ تم حفظ الحضور بنجاح');
+
   notify('✅ تم حفظ الحضور بنجاح');
 }
 
@@ -2601,43 +2502,6 @@ function pageStudents(){
   </div>`;
 }
 
-function updateStudentsTable(){
-  const students=DB.get('students')||[];
-  const classes=DB.get('classes')||[];
-  const att=ATT.getAll();
-  const today=todayStr();
-  const month=today.slice(0,7);
-  const q=(window._studentSearch||'').trim().toLowerCase();
-  const fClass=window._studentFilter||'';
-
-  let filtered=students.filter(s=>{
-    const matchQ=!q||s.name.toLowerCase().includes(q)||(s.phone||'').includes(q);
-    const matchC=!fClass||s.classId===fClass;
-    return matchQ&&matchC;
-  });
-
-  const rows=filtered.map(s=>{
-    const cls=classes.find(c=>c.id===s.classId);
-    const absMonth=att.filter(a=>a.studentId===s.id&&!a.present&&a.date?.startsWith(month)).length;
-    const todayRec=att.find(a=>a.studentId===s.id&&a.date===today);
-    const statusBadge=todayRec?(todayRec.present?badge('حاضر','green'):badge('غائب','red')):badge('لم يُسجل','gray');
-    return `<tr>
-      <td><div class="flex-gap">${avatar(s.av,s.color,32)} ${s.name}</div></td>
-      <td>${cls?`<div class="flex-gap">${avatar(cls.av||cls.name[0],cls.color,24)} ${cls.name}</div>`:'—'}</td>
-      <td><a href="tel:${s.phone||''}" style="color:var(--green)">${s.phone||'—'}</a></td>
-      <td><span style="font-weight:700;color:${absMonth>3?'#ef4444':absMonth>1?'#f59e0b':'var(--text)'}">${absMonth}</span></td>
-      <td>${statusBadge}</td>
-      <td><div class="flex-gap">
-        <button class="btn-sm" onclick="showEditStudentModal('${s.id}')">✏️</button>
-        <button class="btn-sm btn-danger" onclick="deleteStudent('${s.id}')">🗑️</button>
-      </div></td>
-    </tr>`;
-  }).join('');
-
-  const tbody=document.querySelector('#page-content table tbody');
-  if(tbody) tbody.innerHTML=rows||'<tr><td colspan="6" style="text-align:center;color:var(--sub);padding:30px">لا توجد نتائج</td></tr>';
-}
-
 // ══════════════════════════════════════════════════
 // تعديل بيانات الطالب
 // ══════════════════════════════════════════════════
@@ -2979,67 +2843,164 @@ function pageAudit(){
 }
 
 // ══════════════════════════════════════════════════
+// متابعة الحضور — Toggle & Detail Modal
+// ══════════════════════════════════════════════════
+function toggleMonitorFilter(){
+  window._monitorOnlyMissing=!window._monitorOnlyMissing;
+  setPage('dashboard');
+}
+
+async function showClassAttendanceDetail(classId){
+  const students=DB.get('students')||[];
+  const classes=DB.get('classes')||[];
+  const users=DB.get('users')||[];
+  const today=todayStr();
+  const cls=classes.find(c=>c.id===classId);
+  const teacher=users.find(u=>u.id===cls?.teacherId);
+  let todayAttCls=[];
+  try{
+    const all=await ATT.loadDay(today);
+    todayAttCls=all.filter(a=>a.classId===classId);
+  }catch(e){
+    todayAttCls=ATT.getAll().filter(a=>a.date===today&&a.classId===classId);
+  }
+  const clsStudents=students.filter(s=>s.classId===classId);
+  const presentIds=new Set(todayAttCls.filter(a=>a.present).map(a=>a.studentId));
+  const absentIds=new Set(todayAttCls.filter(a=>!a.present).map(a=>a.studentId));
+  const presentStudents=clsStudents.filter(s=>presentIds.has(s.id));
+  const absentStudents=clsStudents.filter(s=>absentIds.has(s.id));
+  const listRows=list=>list.length
+    ?list.map(s=>`<tr><td><div class="flex-gap">${avatar(s.av,s.color,30)} ${s.name}</div></td></tr>`).join('')
+    :`<tr><td style="text-align:center;color:var(--sub);padding:14px">لا يوجد</td></tr>`;
+  document.body.insertAdjacentHTML('beforeend',`
+  <div class="modal-overlay" id="class-att-modal" onclick="if(event.target===this)this.remove()">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:560px">
+      <div class="flex-between" style="margin-bottom:6px">
+        <div>
+          <div class="modal-title" style="margin-bottom:4px">${cls?.name||'فوج'}</div>
+          <div style="font-size:12px;color:var(--sub)">👨‍🏫 الأستاذ: ${teacher?.name||'—'}</div>
+        </div>
+        <button onclick="document.getElementById('class-att-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--sub)">✕</button>
+      </div>
+      <div class="stats-row" style="margin:12px 0 16px">
+        ${[
+          {icon:'👥',label:'إجمالي الطلبة',val:clsStudents.length,color:'#3b82f6',border:'#dbeafe'},
+          {icon:'✅',label:'الحاضرون',val:presentStudents.length,color:'#10b981',border:'#d1fae5'},
+          {icon:'❌',label:'الغائبون',val:absentStudents.length,color:'#ef4444',border:'#fee2e2'},
+        ].map(s=>`<div class="stat-card" style="border-color:${s.border}33">
+          <div class="stat-icon">${s.icon}</div>
+          <div class="stat-num" style="color:${s.color}">${s.val}</div>
+          <div class="stat-label">${s.label}</div>
+        </div>`).join('')}
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-weight:800;font-size:13.5px;margin-bottom:8px">✅ الطلبة الحاضرون</div>
+        <div class="table-wrap"><table><tbody>${listRows(presentStudents)}</tbody></table></div>
+      </div>
+      <div>
+        <div style="font-weight:800;font-size:13.5px;margin-bottom:8px">❌ الطلبة الغائبون</div>
+        <div class="table-wrap"><table><tbody>${listRows(absentStudents)}</tbody></table></div>
+      </div>
+    </div>
+  </div>`);
+}
+
+// ══════════════════════════════════════════════════
+// إصلاح البحث — تحديث الجدول فقط بدون إعادة رسم الصفحة
+// ══════════════════════════════════════════════════
+function updateStudentsTable(){
+  const students=DB.get('students')||[];
+  const classes=DB.get('classes')||[];
+  const att=ATT.getAll();
+  const today=todayStr();
+  const month=today.slice(0,7);
+  const q=(window._studentSearch||'').trim().toLowerCase();
+  const fClass=window._studentFilter||'';
+  const filtered=students.filter(s=>{
+    const matchQ=!q||s.name.toLowerCase().includes(q)||(s.phone||'').includes(q);
+    const matchC=!fClass||s.classId===fClass;
+    return matchQ&&matchC;
+  });
+  const rows=filtered.map(s=>{
+    const cls=classes.find(c=>c.id===s.classId);
+    const absMonth=att.filter(a=>a.studentId===s.id&&!a.present&&a.date?.startsWith(month)).length;
+    const todayRec=att.find(a=>a.studentId===s.id&&a.date===today);
+    const statusBadge=todayRec?(todayRec.present?badge('حاضر','green'):badge('غائب','red')):badge('لم يُسجل','gray');
+    return `<tr>
+      <td><div class="flex-gap">${avatar(s.av,s.color,32)} ${s.name}</div></td>
+      <td>${cls?`<div class="flex-gap">${avatar(cls.av||cls.name[0],cls.color,24)} ${cls.name}</div>`:'—'}</td>
+      <td><a href="tel:${s.phone||''}" style="color:var(--green)">${s.phone||'—'}</a></td>
+      <td><span style="font-weight:700;color:${absMonth>3?'#ef4444':absMonth>1?'#f59e0b':'var(--text)'}">${absMonth}</span></td>
+      <td>${statusBadge}</td>
+      <td><div class="flex-gap">
+        <button class="btn-sm" onclick="showEditStudentModal('${s.id}')">✏️</button>
+        <button class="btn-sm btn-danger" onclick="deleteStudent('${s.id}')">🗑️</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+  const tbody=document.querySelector('#page-content table tbody');
+  if(tbody) tbody.innerHTML=rows||'<tr><td colspan="6" style="text-align:center;color:var(--sub);padding:30px">لا توجد نتائج</td></tr>';
+}
+
+// ══════════════════════════════════════════════════
 // FIREBASE FCM — Push Notifications
 // ══════════════════════════════════════════════════
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyA3SGQ8Z85i3xbWfgA_Bbte4blE86sgyhc",
-  authDomain: "school-attendance-b070a.firebaseapp.com",
-  projectId: "school-attendance-b070a",
-  storageBucket: "school-attendance-b070a.firebasestorage.app",
-  messagingSenderId: "532437656644",
-  appId: "1:532437656644:web:9e57a4192d3ac007eec811",
+const FIREBASE_CONFIG={
+  apiKey:"AIzaSyA3SGQ8Z85i3xbWfgA_Bbte4blE86sgyhc",
+  authDomain:"school-attendance-b070a.firebaseapp.com",
+  projectId:"school-attendance-b070a",
+  storageBucket:"school-attendance-b070a.firebasestorage.app",
+  messagingSenderId:"532437656644",
+  appId:"1:532437656644:web:9e57a4192d3ac007eec811",
 };
-const VAPID_KEY = "BMc76F1TTytXzY6qVlTOsDm9wXYPerAwz5W8vOotKLKiqv3V9MhGBEXg0C0lerYT-8kJDX4Ktxm_8K1mZnnuW3I";
-const SUPABASE_EDGE_URL = "https://hnhbzvdsqmtvtgtpujiv.supabase.co/functions/v1/send-notification";
+const VAPID_KEY="BMc76F1TTytXzY6qVlTOsDm9wXYPerAwz5W8vOotKLKiqv3V9MhGBEXg0C0lerYT-8kJDX4Ktxm_8K1mZnnuW3I";
+const SUPABASE_EDGE_URL="https://hnhbzvdsqmtvtgtpujiv.supabase.co/functions/v1/send-notification";
 
 async function initFCM(){
   try{
-    const {initializeApp,getApps} = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-    const {getMessaging,getToken,onMessage} = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js");
+    const {initializeApp,getApps}=await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+    const {getMessaging,getToken,onMessage}=await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js");
     let app;
-    if(!getApps().length) app = initializeApp(FIREBASE_CONFIG);
-    else app = getApps()[0];
-    const messaging = getMessaging(app);
-    onMessage(messaging, payload=>{
-      const {title,body} = payload.notification||{};
+    if(!getApps().length) app=initializeApp(FIREBASE_CONFIG);
+    else app=getApps()[0];
+    const messaging=getMessaging(app);
+    onMessage(messaging,payload=>{
+      const {title,body}=payload.notification||{};
       notify(`🔔 ${title}: ${body}`);
     });
-    const permission = await Notification.requestPermission();
-    if(permission === 'granted'){
-      const token = await getToken(messaging,{vapidKey:VAPID_KEY});
-      if(token && currentUser){
-        const users = DB.get('users')||[];
-        const idx = users.findIndex(u=>u.id===currentUser.id);
-        if(idx!==-1 && users[idx].fcmToken !== token){
-          users[idx].fcmToken = token;
-          DB.set('users', users);
+    const permission=await Notification.requestPermission();
+    if(permission==='granted'){
+      const token=await getToken(messaging,{vapidKey:VAPID_KEY});
+      if(token&&currentUser){
+        const users=DB.get('users')||[];
+        const idx=users.findIndex(u=>u.id===currentUser.id);
+        if(idx!==-1&&users[idx].fcmToken!==token){
+          users[idx].fcmToken=token;
+          DB.set('users',users);
         }
-        currentUser.fcmToken = token;
+        currentUser.fcmToken=token;
         notify('✅ تم تفعيل الإشعارات');
       }
     }
-  }catch(e){ console.warn('FCM init error:', e); }
+  }catch(e){console.warn('FCM init error:',e);}
 }
 
-async function sendPushNotification(teacherId, teacherName, className){
-  const key = `reminder_${teacherId}_${todayStr()}`;
-  if(sessionStorage.getItem(key)){ notify('⚠️ تم إرسال التذكير مسبقاً اليوم'); return; }
+async function sendPushNotification(teacherId,teacherName,className){
+  const key=`reminder_${teacherId}_${todayStr()}`;
+  if(sessionStorage.getItem(key)){notify('⚠️ تم إرسال التذكير مسبقاً اليوم');return;}
   try{
-    const users = DB.get('users')||[];
-    const teacher = users.find(u=>u.id===teacherId);
-    if(!teacher?.fcmToken){ notify('⚠️ المعلم لم يفعّل الإشعارات بعد'); return; }
-    const res = await fetch(SUPABASE_EDGE_URL,{
+    const users=DB.get('users')||[];
+    const teacher=users.find(u=>u.id===teacherId);
+    if(!teacher?.fcmToken){notify('⚠️ المعلم لم يفعّل الإشعارات بعد');return;}
+    const res=await fetch(SUPABASE_EDGE_URL,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':`Bearer ${SUPABASE_KEY}`},
-      body: JSON.stringify({token: teacher.fcmToken, teacherName, className})
+      body:JSON.stringify({token:teacher.fcmToken,teacherName,className})
     });
-    const data = await res.json();
-    if(res.ok){
-      sessionStorage.setItem(key, '1');
-      notify('✅ تم إرسال التذكير للمعلم');
-    }
-    else{ notify('⚠️ فشل إرسال التذكير'); console.warn(data); }
-  }catch(e){ notify('⚠️ فشل إرسال التذكير'); console.warn(e); }
+    const data=await res.json();
+    if(res.ok){sessionStorage.setItem(key,'1');notify('✅ تم إرسال التذكير للمعلم');}
+    else{notify('⚠️ فشل إرسال التذكير');console.warn(data);}
+  }catch(e){notify('⚠️ فشل إرسال التذكير');console.warn(e);}
 }
 
 // ══════════════════════════════════════════════════
@@ -3066,15 +3027,18 @@ Object.assign(window, {
 
 // تسجيل Service Workers
 if('serviceWorker' in navigator){
-  // Firebase Messaging SW للإشعارات
   navigator.serviceWorker.register('/firebase-messaging-sw.js')
     .then(()=>console.log('FCM SW registered'))
-    .catch(e=>console.warn('FCM SW error:', e));
-  // PWA SW للاختصار والعمل بدون إنترنت
+    .catch(e=>console.warn('FCM SW error:',e));
   navigator.serviceWorker.register('/sw.js')
     .then(()=>console.log('PWA SW registered'))
-    .catch(e=>console.warn('PWA SW error:', e));
+    .catch(e=>console.warn('PWA SW error:',e));
 }
+
+// تفعيل FCM للمعلم بعد تسجيل الدخول
+document.addEventListener('userLoggedIn',()=>{
+  if(currentUser?.role==='teacher') initFCM();
+});
 </script>
 </body>
 </html>
