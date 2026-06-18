@@ -453,7 +453,11 @@ const KEYS = ['users','classes','students','auditLog','schoolLogo','darkMode','i
 
 async function loadAllFromSupabase(){
   if(!SB_CONFIGURED){
-    // Fallback: use localStorage only
+    KEYS.forEach(k=>{ try{ STORE[k]=JSON.parse(localStorage.getItem('amouri_'+k)); }catch{} });
+    return;
+  }
+  // لا نحاول الاتصال بـ Supabase إذا كان الملف مفتوحاً محلياً
+  if(location.protocol === 'file:' || location.hostname === 'localhost' && !location.port){
     KEYS.forEach(k=>{ try{ STORE[k]=JSON.parse(localStorage.getItem('amouri_'+k)); }catch{} });
     return;
   }
@@ -462,19 +466,15 @@ async function loadAllFromSupabase(){
     const { data, error } = await supabase
       .from('amouri_store')
       .select('key, value');
-    if(error) throw error;
-    // Load fetched rows into STORE
+    if(error) throw new Error(error.message || error.code || JSON.stringify(error));
     (data||[]).forEach(row => { STORE[row.key] = row.value; });
-    // Keys not in DB stay null
     KEYS.forEach(k=>{ if(!(k in STORE)) STORE[k]=null; });
   } catch(e){
-    console.warn('Supabase load error:', e);
-    // fallback to localStorage if offline
+    const msg = e?.message || e?.toString() || 'خطأ غير معروف';
+    console.warn('Supabase load error:', msg);
     KEYS.forEach(k=>{ if(STORE[k]==null){ try{ STORE[k]=JSON.parse(localStorage.getItem('amouri_'+k)); }catch{} } });
   }
-  // Preload today's ATT cache from localStorage backup
   try{
-    const today = todayStr();
     const keys = Object.keys(localStorage).filter(k=>k.startsWith('att_'));
     keys.forEach(k=>{
       const cacheKey = k.replace('att_','');
@@ -489,17 +489,22 @@ async function loadAllFromSupabase(){
 const _pendingSaves = new Set();
 
 async function saveToSupabase(k, v){
-  // Always save locally as backup
   try{ localStorage.setItem('amouri_'+k, JSON.stringify(v)); }catch{}
-  // Save to Supabase if configured (upsert by key)
   if(!SB_CONFIGURED) return;
+  if(location.protocol === 'file:') return;
   _pendingSaves.add(k);
   try{
     const { error } = await supabase
       .from('amouri_store')
       .upsert({ key: k, value: v }, { onConflict: 'key' });
-    if(error) console.warn('Supabase save error:', error);
-  }catch(e){ console.warn('Supabase save error:', e); }
+    if(error){
+      const msg = error.message || error.code || JSON.stringify(error);
+      console.warn('Supabase save error:', msg);
+    }
+  }catch(e){
+    const msg = e?.message || e?.toString() || 'خطأ غير معروف';
+    console.warn('Supabase save error:', msg);
+  }
   finally{
     setTimeout(()=>_pendingSaves.delete(k), 2000);
   }
@@ -2758,7 +2763,8 @@ function exportJSON(){
     exportDate: new Date().toISOString(),
     school: 'مدرسة عموري للقرآن الكريم',
     classes: DB.get('classes')||[],
-    students: (DB.get('students')||[]).map(s=>({...s, password:undefined})),
+    students: DB.get('students')||[],
+    users: DB.get('users')||[],
     attendance: ATT.getAll(),
   };
   const blob=new Blob([JSON.stringify(data, null, 2)],{type:'application/json'});
@@ -2766,7 +2772,7 @@ function exportJSON(){
   a.href=URL.createObjectURL(blob);
   a.download=`نسخة_احتياطية_${new Date().toISOString().slice(0,10)}.json`;
   a.click();
-  notify('✅ تم تصدير النسخة الاحتياطية JSON');
+  notify('✅ تم تصدير النسخة الاحتياطية الشاملة');
 }
 
 function importJSON(){
@@ -2790,6 +2796,7 @@ function importJSON(){
         `📅 تاريخ النسخة: ${data.exportDate ? new Date(data.exportDate).toLocaleDateString('ar-DZ') : 'غير معروف'}\n` +
         `🏫 عدد الأفواج: ${(data.classes||[]).length}\n` +
         `👥 عدد الطلبة: ${(data.students||[]).length}\n` +
+        `👨‍🏫 عدد المعلمين: ${(data.users||[]).filter(u=>u.role==='teacher').length}\n` +
         `📋 عدد سجلات الحضور: ${(data.attendance||[]).length}\n\n` +
         `⚠️ تنبيه: سيتم استيراد البيانات المفقودة فقط، لن يتم حذف أي بيانات موجودة.`
       );
@@ -2811,6 +2818,14 @@ function importJSON(){
         const existingIds = new Set(existing.map(s=>s.id));
         const toAdd = data.students.filter(s => !existingIds.has(s.id));
         if(toAdd.length > 0) DB.set('students', [...existing, ...toAdd]);
+      }
+
+      // استيراد المعلمين (إضافة المفقودين فقط — مع المحافظة على admin الحالي)
+      if(data.users && data.users.length > 0){
+        const existing = DB.get('users')||[];
+        const existingIds = new Set(existing.map(u=>u.id));
+        const toAdd = data.users.filter(u => !existingIds.has(u.id) && u.role !== 'admin');
+        if(toAdd.length > 0) DB.set('users', [...existing, ...toAdd]);
       }
 
       // استيراد الحضور
